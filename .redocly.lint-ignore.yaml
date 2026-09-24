@@ -1,0 +1,7 @@
+# Deliberate exceptions to redocly.yaml rules. Keep this list short and explain each entry.
+api/openapi.yaml:
+  # Health checks and the spec itself take no input and cannot fail with a client error.
+  operation-4xx-response:
+    - '#/paths/~1healthz/get/responses'
+    - '#/paths/~1readyz/get/responses'
+    - '#/paths/~1openapi.yaml/get/responses'

@@ -1,0 +1,139 @@
+# Interactive walkthrough of the API for the VS Code "REST Client" extension (humao.rest-client).
+# Start the stack (docker compose up -d --build), then click "Send Request" above each block, top to bottom.
+# Every request here is described in api/openapi.yaml and explained in docs/api.md.
+
+@api = http://localhost:8080
+@key = pk_dev_local_public_key_0001
+
+### ── Operations ─────────────────────────────────────────────────────────────
+GET {{api}}/healthz
+
+###
+GET {{api}}/readyz
+
+### ── Client sync (docs/api.md §6.1) ────────────────────────────────────────
+# @name manifest
+GET {{api}}/v1/manifest?app=web&clientVersion=1.0.0
+X-Api-Key: {{key}}
+
+### Year table (immutable, from the manifest link)
+GET {{api}}{{manifest.response.body.$.links.data}}
+X-Api-Key: {{key}}
+
+### UI config (version 0 = built-in default)
+GET {{api}}{{manifest.response.body.$.links.config}}
+X-Api-Key: {{key}}
+
+### Events for the current BS year (version from the manifest)
+GET {{api}}/v1/events/buckets/{{manifest.response.body.$.currentBsYear}}/{{manifest.response.body.$.defaultBucketVersion}}
+X-Api-Key: {{key}}
+
+### ── Dates (§6.2) ───────────────────────────────────────────────────────────
+GET {{api}}/v1/convert?ad=2026-09-24
+X-Api-Key: {{key}}
+
+###
+GET {{api}}/v1/convert?bs=2083-01-01
+X-Api-Key: {{key}}
+
+###
+GET {{api}}/v1/today?tz=Asia/Kathmandu
+X-Api-Key: {{key}}
+
+###
+GET {{api}}/v1/months/BS/2083/6?include=events
+X-Api-Key: {{key}}
+
+### ── Admin sign-in (§3.2) ───────────────────────────────────────────────────
+# @name login
+POST {{api}}/v1/admin/auth/login
+Content-Type: application/json
+
+{ "email": "admin@example.com", "password": "change-me-please-now" }
+
+###
+@token = {{login.response.body.$.accessToken}}
+GET {{api}}/v1/admin/me
+Authorization: Bearer {{token}}
+
+### ── Events (§6.3) ──────────────────────────────────────────────────────────
+# @name created
+POST {{api}}/v1/admin/events
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "category": "public_holiday",
+  "title": { "en": "Office foundation day", "ne": "स्थापना दिवस" },
+  "basis": "BS",
+  "start": "2083-06-20"
+}
+
+###
+@eventId = {{created.response.body.$.id}}
+PATCH {{api}}/v1/admin/events/{{eventId}}
+Authorization: Bearer {{token}}
+Content-Type: application/merge-patch+json
+If-Match: "v1"
+
+{ "description": { "en": "Offices closed" } }
+
+###
+POST {{api}}/v1/admin/events/{{eventId}}/publish
+Authorization: Bearer {{token}}
+
+### The manifest now shows a new version for the 2083 bucket
+GET {{api}}/v1/manifest
+X-Api-Key: {{key}}
+
+### Admin list (filters: status, category, q, from, to, limit, cursor)
+GET {{api}}/v1/admin/events?status=published&limit=20
+Authorization: Bearer {{token}}
+
+### Bulk import: dry run
+POST {{api}}/v1/admin/events/import
+Authorization: Bearer {{token}}
+Content-Type: text/csv
+
+category,title_en,basis,start,end
+event,Annual meeting,AD,2026-12-25,2026-12-26
+festival,Example festival,BS,2083-07-01,
+
+### ── Year table (§6.5) ──────────────────────────────────────────────────────
+GET {{api}}/v1/admin/years
+Authorization: Bearer {{token}}
+
+###
+GET {{api}}/v1/admin/years/drafts?state=pending
+Authorization: Bearer {{token}}
+
+### ── UI config (§6.6) ───────────────────────────────────────────────────────
+POST {{api}}/v1/admin/ui-configs/validate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "schemaVersion": 1,
+  "theme": {
+    "light": { "bg": "#FFFFFF", "surface": "#F6F7F9", "text": "#EEEEEE", "muted": "#4B5563", "border": "#E5E7EB",
+               "primary": "#1D4ED8", "onPrimary": "#FFFFFF", "today": "#1D4ED8", "holiday": "#B91C1C", "weekend": "#B91C1C", "disabled": "#9CA3AF" },
+    "dark":  { "bg": "#0B0F17", "surface": "#141A24", "text": "#F3F4F6", "muted": "#9CA3AF", "border": "#273041",
+               "primary": "#60A5FA", "onPrimary": "#0B0F17", "today": "#60A5FA", "holiday": "#F87171", "weekend": "#F87171", "disabled": "#4B5563" }
+  }
+}
+
+###
+GET {{api}}/v1/admin/ui-configs/web
+Authorization: Bearer {{token}}
+
+### ── Platform ───────────────────────────────────────────────────────────────
+GET {{api}}/v1/admin/api-clients
+Authorization: Bearer {{token}}
+
+###
+GET {{api}}/v1/admin/audit?entity=event&limit=10
+Authorization: Bearer {{token}}
+
+###
+GET {{api}}/v1/admin/health/data
+Authorization: Bearer {{token}}

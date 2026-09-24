@@ -1,0 +1,7 @@
+.git
+**/node_modules
+docs
+deploy
+.github
+*.md
+.env

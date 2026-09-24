@@ -1,0 +1,2498 @@
+openapi: 3.0.3
+info:
+  title: BS/AD Calendar API
+  version: 1.0.0
+  description: |
+    API-controlled Bikram Sambat (BS) and Gregorian (AD) calendar: year data, events and
+    admin-controlled UI configuration for web (Next.js) and mobile (React Native) clients.
+
+    This document is the **contract**. The server embeds it, serves it at `/openapi.yaml`,
+    and the flow test (`services/calendar-api/internal/httpapi/flow_test.go`) validates every
+    real request and response against it, so the docs cannot drift from the implementation.
+
+    ## How clients use the API
+
+    1. Ship the bundled year table and default theme, and render immediately.
+    2. Call `GET /v1/manifest` on start, on foreground and every 15 minutes (it is tiny and CDN-cached for 30 s).
+    3. Download only what changed. Every other URL contains its version and is **immutable**:
+       `/v1/calendar/data/{version}`, `/v1/ui-config/{app}/{version}`, `/v1/events/buckets/{bsYear}/{version}`.
+    4. Convert dates locally with the year table. `GET /v1/convert` exists for thin clients and other backends.
+
+    See `docs/api.md` for the full guide, including curl walkthroughs of every flow.
+
+    ## Authentication
+
+    * **Public routes** need an API key in `X-Api-Key`. Public keys (`pk_…`) ship inside apps and are not
+      secrets; they identify the app, enforce origin allow-lists and rate limits. Server keys (`sk_…`) are for backends.
+    * **Admin routes** need `Authorization: Bearer <accessToken>` from `POST /v1/admin/auth/login`.
+      Access tokens live 15 minutes; refresh tokens rotate on every use and reuse revokes the session.
+
+    ## Conventions
+
+    * Dates are `YYYY-MM-DD` strings, always labelled with their calendar. BS dates can have day 32, so they are
+      never typed as `format: date`.
+    * Errors are `application/problem+json` (RFC 9457) with a stable `code`. See the `Problem` schema.
+    * Admin writes use optimistic locking: send `If-Match: "v3"` (the resource `version`). Stale writes get `412`.
+    * `PATCH` bodies are JSON Merge Patch (RFC 7396): send only the fields to change; `null` clears a field.
+    * `/v1` only changes additively. Breaking changes will ship as `/v2`.
+  contact:
+    name: Calendar platform team
+servers:
+  - url: http://localhost:8080
+    description: Local docker compose stack
+tags:
+  - name: Sync
+    description: The manifest and the immutable resources it points to. This is what apps call.
+  - name: Dates
+    description: Server-side conversion and month grids for thin clients and other backends.
+  - name: Events
+    description: Public, published events and the ICS subscription feed.
+  - name: Telemetry
+    description: Anonymous client health signals.
+  - name: Operations
+    description: Health checks and documentation.
+  - name: Admin auth
+    description: Login, token refresh and logout for the admin panel.
+  - name: Admin events
+    description: Categories and events (draft → published → archived, soft delete, import, copy to next year).
+  - name: Admin year table
+    description: Changes to BS month lengths go through a four-eyes draft → approve workflow with an impact report.
+  - name: Admin UI config
+    description: Theme and display options with review, staged rollout and rollback.
+  - name: Admin platform
+    description: API keys, webhooks, users, audit log and data health.
+x-tagGroups:
+  - name: Client API
+    tags: [Sync, Dates, Events, Telemetry, Operations]
+  - name: Admin API
+    tags: [Admin auth, Admin events, Admin year table, Admin UI config, Admin platform]
+
+paths:
+  /healthz:
+    get:
+      tags: [Operations]
+      summary: Liveness
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /readyz:
+    get:
+      tags: [Operations]
+      summary: Readiness (database and year table)
+      operationId: readyz
+      security: []
+      responses:
+        '200':
+          description: Ready to serve traffic.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ready' }
+        '503':
+          description: Not ready; the load balancer should not route traffic here.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ready' }
+  /openapi.yaml:
+    get:
+      tags: [Operations]
+      summary: This document
+      operationId: getOpenAPI
+      security: []
+      responses:
+        '200':
+          description: OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  # ---------------------------------------------------------------- Sync
+  /v1/manifest:
+    get:
+      tags: [Sync]
+      summary: Current versions of everything a client caches
+      description: |
+        The only frequently-changing resource. Compare each version with your cache and fetch only
+        what changed. Cached at the CDN for 30 seconds; send `If-None-Match` to get `304`.
+
+        Bucket version for a BS year = `eventBuckets[year]` if present, otherwise `defaultBucketVersion`.
+        A config `candidate` is a staged rollout: apply it only if `hash(installId) % 100 < percent`.
+      operationId: getManifest
+      parameters:
+        - name: app
+          in: query
+          description: App key whose UI config to report (for example `web` or `mobile`).
+          schema: { type: string, pattern: '^[a-z][a-z0-9-]{1,30}$', default: web }
+        - name: clientVersion
+          in: query
+          description: Semver of the calling app. Enables `updateRequired` and config compatibility.
+          schema: { type: string, pattern: '^\d+\.\d+\.\d+$', example: 1.4.0 }
+      responses:
+        '200':
+          description: Manifest.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Manifest' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/calendar/data/latest:
+    get:
+      tags: [Sync]
+      summary: Redirect to the current year table
+      operationId: getCalendarDataLatest
+      responses:
+        '302':
+          description: Redirect to `/v1/calendar/data/{currentVersion}` (not cached).
+          headers:
+            Location: { schema: { type: string } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/calendar/data/{version}:
+    get:
+      tags: [Sync]
+      summary: Year table (immutable)
+      description: |
+        The full BS year table for a data version. Immutable: cache forever.
+        Verify `sha256` (see the CalendarData schema for the exact canonical form) and the table invariants
+        before using it; on failure keep the previous table.
+      operationId: getCalendarData
+      parameters:
+        - name: version
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Year table.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CalendarData' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/ui-config/{app}/{version}:
+    get:
+      tags: [Sync]
+      summary: UI configuration (immutable)
+      description: Version `0` is the built-in default and is cached for an hour; published versions are immutable.
+      operationId: getUiConfig
+      parameters:
+        - $ref: '#/components/parameters/App'
+        - name: version
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: The configuration document (see `fixtures/ui-config.schema.json`).
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigDocument' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/events/buckets/{bsYear}/{version}:
+    get:
+      tags: [Sync]
+      summary: All published events touching a BS year (immutable)
+      description: |
+        Recurrences are expanded. An AD or BS month view needs at most two buckets.
+        Requesting an older version redirects (`302`, not cached) to the current one;
+        a future version returns `404 VERSION_NOT_FOUND`.
+      operationId: getEventBucket
+      parameters:
+        - name: bsYear
+          in: path
+          required: true
+          schema: { type: integer, example: 2083 }
+        - name: version
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 0 }
+      responses:
+        '200':
+          description: Bucket.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventBucket' }
+        '302':
+          description: The version is outdated; follow `Location` to the current one.
+          headers:
+            Location: { schema: { type: string } }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Dates
+  /v1/convert:
+    get:
+      tags: [Dates]
+      summary: Convert one date between AD and BS
+      description: Send exactly one of `ad` or `bs`. Devanagari digits are accepted.
+      operationId: convertDate
+      parameters:
+        - name: ad
+          in: query
+          schema: { type: string, example: '2026-09-24' }
+        - name: bs
+          in: query
+          schema: { type: string, example: '2083-06-08' }
+      responses:
+        '200':
+          description: The date in both calendars.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversion' }
+              example:
+                ad: { date: '2026-09-24', year: 2026, month: 9, day: 24, monthName: { en: September, ne: सेप्टेम्बर } }
+                bs: { date: '2083-06-08', dateNe: २०८३-०६-०८, year: 2083, month: 6, day: 8, monthName: { en: Ashwin, ne: असोज }, daysInMonth: 31, yearStatus: verified }
+                weekday: { index: 4, name: { en: Thursday, ne: बिहीबार } }
+                epochDay: 20720
+                dataVersion: 1
+        '304': { $ref: '#/components/responses/NotModified' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/today:
+    get:
+      tags: [Dates]
+      summary: Today in both calendars
+      operationId: getToday
+      parameters:
+        - name: tz
+          in: query
+          description: IANA time zone that defines "today".
+          schema: { type: string, default: Asia/Kathmandu }
+      responses:
+        '200':
+          description: Today.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversion' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/months/{basis}/{year}/{month}:
+    get:
+      tags: [Dates]
+      summary: Ready-to-render 42-cell month grid
+      operationId: getMonthGrid
+      parameters:
+        - name: basis
+          in: path
+          required: true
+          schema: { type: string, enum: [AD, BS] }
+        - name: year
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: month
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 12 }
+        - name: weekStart
+          in: query
+          description: 0 = Sunday (Nepal default), 1 = Monday, 6 = Saturday.
+          schema: { type: integer, minimum: 0, maximum: 6, default: 0 }
+        - name: weekendDays
+          in: query
+          description: Comma-separated weekdays (0-6). Nepal default is Saturday only.
+          schema: { type: string, default: '6' }
+        - name: include
+          in: query
+          description: Set to `events` to attach published events to each cell.
+          schema: { type: string, enum: [events] }
+      responses:
+        '200':
+          description: Month grid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MonthGrid' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Events
+  /v1/events:
+    get:
+      tags: [Events]
+      summary: Published events in a date range (max 366 days)
+      description: For servers and search. Apps should use buckets from the manifest instead.
+      operationId: listPublicEvents
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, example: '2083-06-01' }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, example: '2083-06-31' }
+        - name: basis
+          in: query
+          description: Calendar of `from` and `to`.
+          schema: { type: string, enum: [AD, BS], default: AD }
+        - name: category
+          in: query
+          description: Comma-separated category keys.
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Case-insensitive title search (English or Nepali).
+          schema: { type: string }
+      responses:
+        '200':
+          description: Matching occurrences, sorted by start date.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventRange' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/events.ics:
+    get:
+      tags: [Events]
+      summary: iCalendar subscription feed
+      description: |
+        Subscribe from Google Calendar, Apple Calendar or Outlook. Calendar apps cannot send headers,
+        so this route also accepts the key as `?api_key=`. Use a public key restricted to this purpose.
+      operationId: getICS
+      security:
+        - ApiKey: []
+        - ApiKeyQuery: []
+      parameters:
+        - name: fromYear
+          in: query
+          description: First BS year (default current year - 1).
+          schema: { type: integer }
+        - name: toYear
+          in: query
+          description: Last BS year (default current year + 1, at most fromYear + 4).
+          schema: { type: integer }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: lang
+          in: query
+          schema: { type: string, enum: [en, ne], default: en }
+      responses:
+        '200':
+          description: RFC 5545 calendar.
+          content:
+            text/calendar:
+              schema: { type: string }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/categories:
+    get:
+      tags: [Events]
+      summary: Event categories (legend colours and holiday flags)
+      operationId: listPublicCategories
+      responses:
+        '200':
+          description: Categories in display order.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [categories]
+                properties:
+                  categories:
+                    type: array
+                    items: { $ref: '#/components/schemas/PublicCategory' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Telemetry
+  /v1/telemetry:
+    post:
+      tags: [Telemetry]
+      summary: Report client health events
+      description: Anonymous, batched (1-50 events). Feeds the `client_telemetry_events_total` metric and alerts.
+      operationId: postTelemetry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TelemetryBatch' }
+      responses:
+        '202':
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [accepted]
+                properties:
+                  accepted: { type: integer }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Admin auth
+  /v1/admin/auth/login:
+    post:
+      tags: [Admin auth]
+      summary: Sign in with email and password
+      description: Rate-limited to 10 attempts per minute per IP. Wrong email and wrong password look identical.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, example: admin@example.com }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Tokens. Store the refresh token server-side (for example in an httpOnly cookie of the admin panel's backend).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/auth/refresh:
+    post:
+      tags: [Admin auth]
+      summary: Rotate the refresh token and get a new access token
+      description: Each refresh token works once. Presenting an already-used token revokes the session (`TOKEN_REUSED`).
+      operationId: refreshToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: New tokens.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPair' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/auth/logout:
+    post:
+      tags: [Admin auth]
+      summary: Revoke the current session
+      operationId: logout
+      security: [{ BearerAuth: [] }]
+      responses:
+        '204': { description: Signed out. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/me:
+    get:
+      tags: [Admin auth]
+      summary: The signed-in user and their permissions
+      operationId: getMe
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Current user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Admin categories & events
+  /v1/admin/categories:
+    get:
+      tags: [Admin events]
+      summary: List categories
+      operationId: listCategories
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Categories.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Category' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin events]
+      summary: Create a category
+      description: Requires `categories:write`. Category changes bump every bucket version (colours appear in buckets).
+      operationId: createCategory
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryInput' }
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Category' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/categories/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [Admin events]
+      summary: Update a category (JSON Merge Patch)
+      description: The `key` cannot change because clients filter by it.
+      operationId: patchCategory
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/CategoryPatch' }
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryPatch' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Category' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin events]
+      summary: Delete an unused category
+      operationId: deleteCategory
+      security: [{ BearerAuth: [] }]
+      responses:
+        '204': { description: Deleted. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/events:
+    get:
+      tags: [Admin events]
+      summary: List events (keyset pagination by AD start date)
+      operationId: listEvents
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          description: Omit for every non-deleted event.
+          schema: { type: string, enum: [draft, published, archived, deleted] }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          description: AD date; events ending on or after it.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: AD date; events starting on or before it.
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPage' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin events]
+      summary: Create an event (as a draft)
+      description: |
+        Dates are in the event's `basis` calendar. The server validates them against the year table and
+        stores the AD range. Nothing is visible to clients until the event is published.
+      operationId: createEvent
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventInput' }
+            examples:
+              bsHoliday:
+                summary: One-day holiday on a BS date
+                value: { category: public_holiday, title: { en: Office foundation day, ne: स्थापना दिवस }, basis: BS, start: '2083-06-20' }
+              yearlyBs:
+                summary: Every 1 Baisakh
+                value: { category: observance, title: { en: Nepali New Year, ne: नयाँ वर्ष }, basis: BS, start: '2083-01-01', recurrence: yearly_bs }
+              rrule:
+                summary: Timed, every second Friday (AD)
+                value: { category: event, title: { en: Team review }, basis: AD, start: '2026-10-09', allDay: false, startTime: '10:00', endTime: '11:00', recurrence: rrule, rrule: 'FREQ=MONTHLY;BYDAY=2FR' }
+      responses:
+        '201':
+          description: Created.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/events/import:
+    post:
+      tags: [Admin events]
+      summary: Bulk import from CSV (dry run by default)
+      description: |
+        Columns: `category,title_en,title_ne,basis,start,end,all_day,start_time,end_time,recurrence,rrule,recur_until,is_holiday,description_en,description_ne`
+        (`category`, `title_en`, `basis`, `start` required). Every row is validated first; with `dryRun=false`
+        all valid rows are created as drafts in one transaction, and nothing is created if any row is invalid.
+      operationId: importEvents
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: dryRun
+          in: query
+          schema: { type: boolean, default: true }
+        - name: skipDuplicates
+          in: query
+          schema: { type: boolean, default: false }
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string }
+      responses:
+        '200':
+          description: Dry-run report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportReport' }
+        '201':
+          description: Imported.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportReport' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/events/copy-year:
+    post:
+      tags: [Admin events]
+      summary: Copy one-off BS events to another year as drafts
+      description: Lunar festivals move every year, so review each draft before publishing. Safe to run twice.
+      operationId: copyYear
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CopyYearInput' }
+      responses:
+        '201':
+          description: Report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CopyYearReport' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/events/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Admin events]
+      summary: Get an event
+      operationId: getEvent
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Event. `ETag` is the value to send as `If-Match`.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Admin events]
+      summary: Update an event (JSON Merge Patch, If-Match required)
+      operationId: patchEvent
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/EventPatch' }
+          application/json:
+            schema: { $ref: '#/components/schemas/EventPatch' }
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin events]
+      summary: Soft-delete an event (If-Match required)
+      description: Returns the deleted event. Restore it with `POST /restore`.
+      operationId: deleteEvent
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/events/{id}/publish:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Admin events]
+      summary: Publish (clients see it after their next manifest check)
+      operationId: publishEvent
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '200':
+          description: Published (idempotent).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/events/{id}/archive:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Admin events]
+      summary: Archive (hide from clients, keep for records)
+      operationId: archiveEvent
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '200':
+          description: Archived (idempotent).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/events/{id}/restore:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Admin events]
+      summary: Restore a deleted event as a draft
+      operationId: restoreEvent
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '200':
+          description: Restored.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Admin year table
+  /v1/admin/years:
+    get:
+      tags: [Admin year table]
+      summary: The current year table with status and sources
+      operationId: listYears
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Years.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/YearList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/years/drafts:
+    get:
+      tags: [Admin year table]
+      summary: List drafts (newest first)
+      operationId: listYearDrafts
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: state
+          in: query
+          schema: { type: string, enum: [pending, approved, rejected] }
+      responses:
+        '200':
+          description: Drafts.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/YearDraft' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin year table]
+      summary: Propose a change to month lengths
+      description: |
+        Validates the whole resulting table (month lengths 29-32, contiguous years, start-date chain, plausible
+        new-year dates) and returns an impact report listing events whose AD dates would move. Changing a year's
+        total length also moves the next year's start, so fix both years in one draft. Requires `years:propose`.
+      operationId: createYearDraft
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/YearDraftInput' }
+            example:
+              changes:
+                - bsYear: 2084
+                  days: [31, 31, 32, 31, 31, 30, 30, 30, 29, 30, 30, 30]
+                  status: verified
+                  source: Official calendar 2084, page 3
+              note: Confirm 2084 against the official calendar
+      responses:
+        '201':
+          description: Pending draft with warnings and impact.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/YearDraft' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/years/drafts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Admin year table]
+      summary: Get a draft
+      operationId: getYearDraft
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Draft.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/YearDraft' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/years/drafts/{id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Admin year table]
+      summary: Approve and publish a draft (four-eyes)
+      description: |
+        The approver must not be the author (`403 FOUR_EYES_REQUIRED`). Approval re-validates against the
+        current table, refuses if any event would fall on a date that no longer exists (`409` with
+        `invalidEvents`), publishes a new data version, re-materialises events, notifies every replica
+        and enqueues `data.published` webhooks.
+      operationId: approveYearDraft
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Approved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/YearDraft' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/years/drafts/{id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Admin year table]
+      summary: Reject (or withdraw) a pending draft
+      operationId: rejectYearDraft
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '200':
+          description: Rejected.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/YearDraft' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Admin UI config
+  /v1/admin/ui-configs/validate:
+    post:
+      tags: [Admin UI config]
+      summary: Validate a config without saving (schema + WCAG contrast)
+      operationId: validateUiConfig
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UiConfigDocument' }
+      responses:
+        '200':
+          description: Validation report (check `valid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/ui-configs/{app}:
+    parameters:
+      - $ref: '#/components/parameters/App'
+    get:
+      tags: [Admin UI config]
+      summary: Channel (stable/candidate) and every version, newest first
+      operationId: listUiConfigs
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Versions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin UI config]
+      summary: Create a draft
+      description: Drafts may be invalid while being edited; the response includes a `validation` report. Requires `config:draft`.
+      operationId: createUiConfig
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UiConfigInput' }
+      responses:
+        '201':
+          description: Draft.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigVersion' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/ui-configs/{app}/rollout:
+    parameters:
+      - $ref: '#/components/parameters/App'
+    post:
+      tags: [Admin UI config]
+      summary: Change the candidate's rollout percentage (100 promotes, 0 pauses)
+      operationId: setUiConfigRollout
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [percent]
+              properties:
+                percent: { type: integer, minimum: 0, maximum: 100 }
+      responses:
+        '200':
+          description: Updated channel.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigChannel' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/ui-configs/{app}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/App'
+    post:
+      tags: [Admin UI config]
+      summary: Emergency rollback to an earlier published version
+      description: Republishes that content as a new version for everyone (clients always move forward). Skips review; audited.
+      operationId: rollbackUiConfig
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [toVersion, reason]
+              properties:
+                toVersion: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        '201':
+          description: The new, published version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigVersion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/ui-configs/{app}/{version}:
+    parameters:
+      - $ref: '#/components/parameters/App'
+      - $ref: '#/components/parameters/ConfigVersion'
+    get:
+      tags: [Admin UI config]
+      summary: Get a version with its validation report
+      operationId: getUiConfigVersion
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigVersion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Admin UI config]
+      summary: Replace a draft's content
+      operationId: updateUiConfig
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UiConfigInput' }
+      responses:
+        '200':
+          description: Updated draft.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigVersion' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/ui-configs/{app}/{version}/submit:
+    parameters:
+      - $ref: '#/components/parameters/App'
+      - $ref: '#/components/parameters/ConfigVersion'
+    post:
+      tags: [Admin UI config]
+      summary: Submit a valid draft for review
+      operationId: submitUiConfig
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: In review.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigVersion' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/ui-configs/{app}/{version}/approve:
+    parameters:
+      - $ref: '#/components/parameters/App'
+      - $ref: '#/components/parameters/ConfigVersion'
+    post:
+      tags: [Admin UI config]
+      summary: Approve and publish (four-eyes), optionally as a staged rollout
+      operationId: approveUiConfig
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                rolloutPercent: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        '200':
+          description: Published.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigVersion' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/ui-configs/{app}/{version}/reject:
+    parameters:
+      - $ref: '#/components/parameters/App'
+      - $ref: '#/components/parameters/ConfigVersion'
+    post:
+      tags: [Admin UI config]
+      summary: Reject a draft or a version in review
+      operationId: rejectUiConfig
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonInput' }
+      responses:
+        '200':
+          description: Rejected.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UiConfigVersion' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ---------------------------------------------------------------- Admin platform
+  /v1/admin/api-clients:
+    get:
+      tags: [Admin platform]
+      summary: List API clients (keys are never returned)
+      operationId: listApiClients
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Clients.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ApiClient' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin platform]
+      summary: Issue an API key (shown once)
+      operationId: createApiClient
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApiClientInput' }
+      responses:
+        '201':
+          description: Client and its key. Store the key now; it cannot be shown again.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiClientCreated' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/api-clients/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    delete:
+      tags: [Admin platform]
+      summary: Revoke an API key
+      operationId: revokeApiClient
+      security: [{ BearerAuth: [] }]
+      responses:
+        '204': { description: Revoked. Other replicas stop accepting it within a minute. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/webhooks:
+    get:
+      tags: [Admin platform]
+      summary: List webhooks
+      operationId: listWebhooks
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Webhooks.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Webhook' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin platform]
+      summary: Register a webhook (signing secret shown once)
+      description: |
+        Deliveries are `POST` JSON bodies (see `WebhookEvent`) with headers `X-Calendar-Event`,
+        `X-Calendar-Delivery` and `X-Calendar-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>`.
+        Reject signatures older than 5 minutes. Failed deliveries retry with backoff for about 24 hours.
+      operationId: createWebhook
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookInput' }
+      callbacks:
+        delivery:
+          '{$request.body#/url}':
+            post:
+              summary: Change notification sent to your webhook URL
+              description: |
+                Verify `X-Calendar-Signature` before trusting the body (see docs/api.md "Webhooks").
+                Respond with any 2xx within 10 seconds; anything else is retried with backoff for about 24 hours.
+              security: []
+              parameters:
+                - name: X-Calendar-Event
+                  in: header
+                  required: true
+                  schema: { type: string, example: events.changed }
+                - name: X-Calendar-Delivery
+                  in: header
+                  required: true
+                  description: Delivery id; the same id is reused on retries, so use it to de-duplicate.
+                  schema: { type: string }
+                - name: X-Calendar-Signature
+                  in: header
+                  required: true
+                  schema: { type: string, example: 't=1790000000,v1=5f2c9e…' }
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema: { $ref: '#/components/schemas/WebhookEvent' }
+              responses:
+                '200': { description: Received. }
+                '400': { description: Rejected (for example a bad signature); the delivery will be retried. }
+      responses:
+        '201':
+          description: Webhook and its signing secret.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookCreated' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/webhooks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    delete:
+      tags: [Admin platform]
+      summary: Deactivate a webhook
+      operationId: deleteWebhook
+      security: [{ BearerAuth: [] }]
+      responses:
+        '204': { description: Deactivated. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/webhooks/{id}/deliveries:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Admin platform]
+      summary: Recent deliveries for a webhook
+      operationId: listWebhookDeliveries
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Deliveries, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/WebhookDelivery' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/users:
+    get:
+      tags: [Admin platform]
+      summary: List admin users
+      operationId: listUsers
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Users.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AdminUser' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Admin platform]
+      summary: Create an admin user
+      operationId: createUser
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [Admin platform]
+      summary: Change role, disable, or reset password
+      description: Disabling or resetting a password revokes the user's sessions. You cannot lock yourself out, and one active super admin must remain.
+      operationId: patchUser
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserPatch' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/audit:
+    get:
+      tags: [Admin platform]
+      summary: Audit trail (newest first)
+      operationId: listAudit
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: entity
+          in: query
+          schema: { type: string, example: event }
+        - name: entityId
+          in: query
+          schema: { type: string }
+        - name: actorId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: action
+          in: query
+          schema: { type: string, example: event.publish }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Entries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/admin/health/data:
+    get:
+      tags: [Admin platform]
+      summary: Data health for the dashboard and yearly-operations alerts
+      operationId: getDataHealth
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Health.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataHealth' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        default: { $ref: '#/components/responses/Problem' }
+
+security:
+  - ApiKey: []
+
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Public (`pk_…`) or server (`sk_…`) API key. Local dev key `pk_dev_local_public_key_0001`.
+    ApiKeyQuery:
+      type: apiKey
+      in: query
+      name: api_key
+      description: Accepted only on `/v1/events.ics`.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  headers:
+    ETag:
+      description: Entity tag. Send it back in `If-None-Match` (GET) or `If-Match` (admin writes).
+      schema: { type: string }
+    CacheControl:
+      description: Caching policy (immutable resources are cached for a year).
+      schema: { type: string }
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    App:
+      name: app
+      in: path
+      required: true
+      description: App key, for example `web` or `mobile`.
+      schema: { type: string, pattern: '^[a-z][a-z0-9-]{1,30}$' }
+    ConfigVersion:
+      name: version
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from `nextCursor`.
+      schema: { type: string }
+    IfMatch:
+      name: If-Match
+      in: header
+      description: Optional optimistic-lock version, for example `"v3"`.
+      schema: { type: string, example: '"v3"' }
+    IfMatchRequired:
+      name: If-Match
+      in: header
+      required: true
+      description: Current version from `ETag`/`version`, for example `"v3"`. Missing → `428`; stale → `412`.
+      schema: { type: string, example: '"v3"' }
+
+  responses:
+    NotModified:
+      description: Not modified (your `If-None-Match` matched).
+    Problem:
+      description: Error (RFC 9457 problem document).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    BadRequest:
+      description: Malformed request (`BAD_REQUEST`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Missing or invalid credentials (`UNAUTHORIZED`, `INVALID_API_KEY`, `INVALID_CREDENTIALS`, `TOKEN_REUSED`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Not allowed (`FORBIDDEN`, `ORIGIN_NOT_ALLOWED`, `FOUR_EYES_REQUIRED`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Not found (`NOT_FOUND`, `VERSION_NOT_FOUND`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Conflict (`CONFLICT`, `INVALID_STATE`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    PreconditionFailed:
+      description: Stale `If-Match` (`VERSION_CONFLICT`); the body has `currentVersion`.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    PreconditionRequired:
+      description: '`If-Match` is required (`PRECONDITION_REQUIRED`).'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unprocessable:
+      description: Validation failed (`VALIDATION_FAILED`, `INVALID_DATE`, `OUT_OF_RANGE`); see `errors`.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    UnsupportedMediaType:
+      description: Wrong `Content-Type` (`UNSUPPORTED_MEDIA_TYPE`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooManyRequests:
+      description: Rate limited (`RATE_LIMITED`); honour `Retry-After`.
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    # ------------------------------------------------------------ shared
+    Problem:
+      type: object
+      description: |
+        RFC 9457 problem document. `code` is stable and documented in docs/api.md. Some errors add
+        extension members: `currentVersion` (412), `invalidEvents` (409 on year approval), `issues`
+        (invalid year table), `report` (UI config or import validation), `constraint`, `events`.
+      required: [type, title, status, code, instance]
+      properties:
+        type: { type: string, example: 'urn:bs-calendar:problem:VALIDATION_FAILED' }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum: [BAD_REQUEST, VALIDATION_FAILED, INVALID_DATE, OUT_OF_RANGE, NOT_FOUND, VERSION_NOT_FOUND,
+                 UNAUTHORIZED, INVALID_CREDENTIALS, INVALID_API_KEY, TOKEN_REUSED, FORBIDDEN, ORIGIN_NOT_ALLOWED,
+                 FOUR_EYES_REQUIRED, CONFLICT, INVALID_STATE, VERSION_CONFLICT, PRECONDITION_REQUIRED,
+                 PAYLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, RATE_LIMITED, INTERNAL, SERVICE_UNAVAILABLE]
+        detail: { type: string }
+        instance: { type: string }
+        requestId: { type: string }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/FieldError' }
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [field, message]
+      properties:
+        field: { type: string, example: title.en }
+        message: { type: string }
+    Localized:
+      type: object
+      additionalProperties: false
+      required: [en, ne]
+      properties:
+        en: { type: string }
+        ne: { type: string }
+    Text:
+      type: object
+      additionalProperties: false
+      description: Bilingual text; English required, Nepali optional.
+      required: [en]
+      properties:
+        en: { type: string, maxLength: 5000 }
+        ne: { type: string, maxLength: 5000 }
+    Colors:
+      type: object
+      additionalProperties: false
+      required: [light, dark]
+      properties:
+        light: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        dark: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+    BSDate:
+      type: string
+      pattern: '^\d{4}-\d{2}-\d{2}$'
+      description: BS date (months can have 32 days, so this is not an RFC 3339 date).
+      example: '2083-06-08'
+    YearStatus:
+      type: string
+      enum: [verified, projected]
+      description: '`projected` years are estimates that may change when the official calendar is published.'
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, version]
+      properties:
+        status: { type: string, enum: [ok] }
+        version: { type: string }
+    Ready:
+      type: object
+      additionalProperties: false
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [ready, not ready] }
+        checks:
+          type: object
+          additionalProperties: { type: string }
+
+    # ------------------------------------------------------------ sync
+    Manifest:
+      type: object
+      additionalProperties: false
+      required: [dataVersion, dataSha256, supportedRange, currentBsYear, firstProjectedBsYear, config, eventBuckets,
+                 defaultBucketVersion, minSupportedClient, updateRequired, links, serverTime]
+      properties:
+        dataVersion: { type: integer, format: int64, example: 12 }
+        dataSha256: { type: string, description: "SHA-256 of the year table (invariant I8); see CalendarData.sha256 for the exact canonical form." }
+        supportedRange: { $ref: '#/components/schemas/SupportedRange' }
+        currentBsYear: { type: integer, description: Current BS year in Nepal. }
+        firstProjectedBsYear: { type: integer, nullable: true }
+        config: { $ref: '#/components/schemas/ManifestConfig' }
+        eventBuckets:
+          type: object
+          description: Versions for BS years that have their own counter.
+          additionalProperties: { type: integer, format: int64 }
+          example: { '2082': 41, '2083': 57 }
+        defaultBucketVersion: { type: integer, format: int64, description: Version of every bucket not listed in `eventBuckets`. }
+        minSupportedClient: { type: string }
+        updateRequired: { type: boolean, description: True when `clientVersion` is below `minSupportedClient`. }
+        links:
+          type: object
+          additionalProperties: false
+          required: [data, config, bucketTemplate]
+          properties:
+            data: { type: string, example: /v1/calendar/data/12 }
+            config: { type: string, example: /v1/ui-config/mobile/7 }
+            bucketTemplate: { type: string, example: '/v1/events/buckets/{bsYear}/{version}' }
+        serverTime: { type: string, format: date-time, description: Use it to detect a wrong device clock. }
+    SupportedRange:
+      type: object
+      additionalProperties: false
+      required: [minBsYear, maxBsYear, minAd, maxAd]
+      properties:
+        minBsYear: { type: integer }
+        maxBsYear: { type: integer }
+        minAd: { type: string, format: date }
+        maxAd: { type: string, format: date }
+    ManifestConfig:
+      type: object
+      additionalProperties: false
+      required: [app, version, minClientVersion, candidate]
+      properties:
+        app: { type: string }
+        version: { type: integer, description: Stable version; 0 means the built-in default. }
+        minClientVersion: { type: string }
+        candidate:
+          nullable: true
+          type: object
+          additionalProperties: false
+          required: [version, percent]
+          properties:
+            version: { type: integer }
+            percent: { type: integer, minimum: 0, maximum: 100 }
+    CalendarData:
+      type: object
+      additionalProperties: false
+      required: [version, sha256, minYear, maxYear, years]
+      properties:
+        version: { type: integer, format: int64 }
+        sha256:
+          type: string
+          description: |
+            Hex SHA-256 of the canonical text form: one line per year, in table order,
+            `<y>:<start>:<d1>,<d2>,...,<d12>:<status>` followed by a newline (`\n`).
+            It does not depend on JSON key order or whitespace. In JavaScript:
+            `sha256(years.map(y => [y.y, y.start, y.days.join(","), y.status].join(":") + "\n").join(""))`.
+        minYear: { type: integer }
+        maxYear: { type: integer }
+        years:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [y, start, days, status]
+            properties:
+              y: { type: integer, description: BS year. }
+              start: { type: string, format: date, description: AD date of 1 Baisakh. }
+              days:
+                type: array
+                minItems: 12
+                maxItems: 12
+                items: { type: integer, minimum: 29, maximum: 32 }
+              status: { $ref: '#/components/schemas/YearStatus' }
+    UiConfigDocument:
+      type: object
+      description: |
+        Admin-controlled UI configuration. The authoritative schema is `fixtures/ui-config.schema.json`
+        (JSON Schema 2020-12); clients parse each field independently and fall back to defaults.
+      additionalProperties: true
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        defaults: { type: object, additionalProperties: true }
+        display: { type: object, additionalProperties: true }
+        theme:
+          type: object
+          additionalProperties: true
+          properties:
+            light: { type: object, additionalProperties: { type: string } }
+            dark: { type: object, additionalProperties: { type: string } }
+        shape: { type: object, additionalProperties: true }
+        font: { type: object, additionalProperties: true }
+      example:
+        schemaVersion: 1
+        defaults: { mode: BS, locale: ne, digits: devanagari, weekStart: 0, weekendDays: [6], todayTimeZone: device, colorScheme: system }
+        display: { allowModeSwitch: true, showSecondaryDate: true, showEventDots: true, maxDotsPerDay: 3, highlightHolidays: true, showProjectedWarning: false, views: [month, agenda], monthHeaderFormat: MMMM YYYY }
+        theme:
+          light: { bg: '#FFFFFF', surface: '#F6F7F9', text: '#111827', muted: '#4B5563', border: '#E5E7EB', primary: '#1D4ED8', onPrimary: '#FFFFFF', today: '#1D4ED8', holiday: '#B91C1C', weekend: '#B91C1C', disabled: '#9CA3AF' }
+          dark: { bg: '#0B0F17', surface: '#141A24', text: '#F3F4F6', muted: '#9CA3AF', border: '#273041', primary: '#60A5FA', onPrimary: '#0B0F17', today: '#60A5FA', holiday: '#F87171', weekend: '#F87171', disabled: '#4B5563' }
+        shape: { radius: 12, density: comfortable }
+        font: { family: system }
+    DatePair:
+      type: object
+      additionalProperties: false
+      required: [ad, bs]
+      properties:
+        ad: { type: string, format: date }
+        bs:
+          type: string
+          nullable: true
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          description: Null only outside the supported BS range.
+    PublicCategory:
+      type: object
+      additionalProperties: false
+      required: [key, name, color, isHoliday, sortOrder]
+      properties:
+        key: { type: string, example: public_holiday }
+        name: { $ref: '#/components/schemas/Text' }
+        color: { $ref: '#/components/schemas/Colors' }
+        isHoliday: { type: boolean }
+        sortOrder: { type: integer }
+    Occurrence:
+      type: object
+      additionalProperties: false
+      description: One occurrence of a published event. Recurring events have ids like `<eventId>@<adDate>`.
+      required: [id, eventId, title, description, category, isHoliday, basis, start, end, allDay, startTime, endTime,
+                 tz, recurring, color, version, updatedAt]
+      properties:
+        id: { type: string }
+        eventId: { type: string, format: uuid }
+        title: { $ref: '#/components/schemas/Text' }
+        description:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/Text' }]
+        category: { type: string }
+        isHoliday: { type: boolean }
+        basis: { type: string, enum: [AD, BS] }
+        start: { $ref: '#/components/schemas/DatePair' }
+        end: { $ref: '#/components/schemas/DatePair' }
+        allDay: { type: boolean }
+        startTime: { type: string, nullable: true, pattern: '^([01]\d|2[0-3]):[0-5]\d$' }
+        endTime: { type: string, nullable: true, pattern: '^([01]\d|2[0-3]):[0-5]\d$' }
+        tz: { type: string, example: Asia/Kathmandu }
+        recurring: { type: boolean }
+        color: { $ref: '#/components/schemas/Colors' }
+        version: { type: integer }
+        updatedAt: { type: string, format: date-time }
+    EventBucket:
+      type: object
+      additionalProperties: false
+      required: [bsYear, version, status, range, generatedAt, categories, events]
+      properties:
+        bsYear: { type: integer }
+        version: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/YearStatus' }
+        range:
+          type: object
+          additionalProperties: false
+          required: [start, end]
+          description: AD dates of 1 Baisakh and the last day of Chaitra.
+          properties:
+            start: { type: string, format: date }
+            end: { type: string, format: date }
+        generatedAt: { type: string, format: date-time }
+        categories: { type: array, items: { $ref: '#/components/schemas/PublicCategory' } }
+        events: { type: array, items: { $ref: '#/components/schemas/Occurrence' } }
+
+    # ------------------------------------------------------------ dates
+    Conversion:
+      type: object
+      additionalProperties: false
+      required: [ad, bs, weekday, epochDay, dataVersion]
+      properties:
+        ad:
+          type: object
+          additionalProperties: false
+          required: [date, year, month, day, monthName]
+          properties:
+            date: { type: string, format: date }
+            year: { type: integer }
+            month: { type: integer }
+            day: { type: integer }
+            monthName: { $ref: '#/components/schemas/Localized' }
+        bs:
+          type: object
+          additionalProperties: false
+          required: [date, dateNe, year, month, day, monthName, daysInMonth, yearStatus]
+          properties:
+            date: { $ref: '#/components/schemas/BSDate' }
+            dateNe: { type: string, description: The BS date in Devanagari digits. }
+            year: { type: integer }
+            month: { type: integer }
+            day: { type: integer }
+            monthName: { $ref: '#/components/schemas/Localized' }
+            daysInMonth: { type: integer }
+            yearStatus: { $ref: '#/components/schemas/YearStatus' }
+        weekday:
+          type: object
+          additionalProperties: false
+          required: [index, name]
+          properties:
+            index: { type: integer, minimum: 0, maximum: 6, description: 0 = Sunday. }
+            name: { $ref: '#/components/schemas/Localized' }
+        epochDay: { type: integer, format: int64, description: Days since 1970-01-01. }
+        dataVersion: { type: integer, format: int64 }
+        timeZone: { type: string, description: Only on /v1/today. }
+    MonthGrid:
+      type: object
+      additionalProperties: false
+      required: [basis, year, month, monthName, daysInMonth, weekStart, yearStatus, dataVersion, cells, events]
+      properties:
+        basis: { type: string, enum: [AD, BS] }
+        year: { type: integer }
+        month: { type: integer }
+        monthName: { $ref: '#/components/schemas/Localized' }
+        daysInMonth: { type: integer }
+        weekStart: { type: integer }
+        yearStatus:
+          nullable: true
+          type: string
+          enum: [verified, projected]
+          description: Only for BS grids.
+        dataVersion: { type: integer, format: int64 }
+        cells:
+          type: array
+          minItems: 42
+          maxItems: 42
+          items:
+            type: object
+            additionalProperties: false
+            required: [ad, bs, day, weekday, inMonth, isToday, isWeekend, isHoliday, eventIds]
+            properties:
+              ad: { type: string, format: date }
+              bs: { type: string, nullable: true, pattern: '^\d{4}-\d{2}-\d{2}$' }
+              day: { type: integer, description: Day number in the grid's basis calendar. }
+              weekday: { type: integer }
+              inMonth: { type: boolean }
+              isToday: { type: boolean, description: Today in Nepal. }
+              isWeekend: { type: boolean }
+              isHoliday: { type: boolean }
+              eventIds: { type: array, items: { type: string } }
+        events: { type: array, items: { $ref: '#/components/schemas/Occurrence' } }
+    EventRange:
+      type: object
+      additionalProperties: false
+      required: [basis, from, to, count, events]
+      properties:
+        basis: { type: string, enum: [AD, BS] }
+        from: { type: string }
+        to: { type: string }
+        count: { type: integer }
+        events: { type: array, items: { $ref: '#/components/schemas/Occurrence' } }
+    TelemetryBatch:
+      type: object
+      additionalProperties: false
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: { type: string, enum: [table_rejected, config_applied, config_field_fallback, sync_failed, out_of_range, update_required] }
+              app: { type: string }
+              clientVersion: { type: string }
+              dataVersion: { type: integer, format: int64 }
+              configVersion: { type: integer }
+              detail: { type: string, maxLength: 500 }
+
+    # ------------------------------------------------------------ admin: auth and users
+    TokenPair:
+      type: object
+      additionalProperties: false
+      required: [accessToken, tokenType, expiresIn, refreshToken, refreshExpiresAt, user]
+      properties:
+        accessToken: { type: string }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresIn: { type: integer, description: Seconds until the access token expires. }
+        refreshToken: { type: string }
+        refreshExpiresAt: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/AdminUser' }
+    Role:
+      type: string
+      enum: [viewer, editor, designer, calendar_admin, super_admin]
+    AdminUser:
+      type: object
+      additionalProperties: false
+      required: [id, email, role, disabled, lastLoginAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        disabled: { type: boolean }
+        lastLoginAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Me:
+      type: object
+      additionalProperties: false
+      required: [id, email, role, permissions]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        permissions:
+          type: array
+          items:
+            type: string
+            enum: [read, 'events:write', 'categories:write', 'years:propose', 'years:approve', 'config:draft', 'config:publish', 'platform:manage']
+    UserInput:
+      type: object
+      additionalProperties: false
+      required: [email, role, password]
+      properties:
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/Role' }
+        password: { type: string, minLength: 12, maxLength: 72 }
+    UserPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        role: { $ref: '#/components/schemas/Role' }
+        disabled: { type: boolean }
+        password: { type: string, minLength: 12, maxLength: 72 }
+
+    # ------------------------------------------------------------ admin: categories and events
+    CategoryInput:
+      type: object
+      additionalProperties: false
+      required: [key, name, colorLight, colorDark]
+      properties:
+        key: { type: string, pattern: '^[a-z][a-z0-9_]{1,40}$', example: public_holiday }
+        name: { $ref: '#/components/schemas/Text' }
+        colorLight: { type: string, pattern: '^#[0-9A-Fa-f]{6}$', example: '#B91C1C' }
+        colorDark: { type: string, pattern: '^#[0-9A-Fa-f]{6}$', example: '#F87171' }
+        isHoliday: { type: boolean, default: false }
+        sortOrder: { type: integer, default: 0 }
+    CategoryPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { $ref: '#/components/schemas/Text' }
+        colorLight: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        colorDark: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        isHoliday: { type: boolean }
+        sortOrder: { type: integer }
+    Category:
+      type: object
+      additionalProperties: false
+      required: [id, key, name, colorLight, colorDark, isHoliday, sortOrder, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        key: { type: string }
+        name: { $ref: '#/components/schemas/Text' }
+        colorLight: { type: string }
+        colorDark: { type: string }
+        isHoliday: { type: boolean }
+        sortOrder: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Recurrence:
+      type: string
+      enum: [none, yearly_bs, yearly_ad, rrule]
+      description: |
+        `yearly_bs` (basis BS) repeats on the same BS month and day, clamped to the month length.
+        `yearly_ad` (basis AD) repeats on the same AD date; 29 Feb falls on 28 Feb in other years.
+        `rrule` (basis AD) is an RFC 5545 rule without DTSTART; FREQ must be DAILY, WEEKLY, MONTHLY or YEARLY.
+        Lunar festivals are not rules: enter them per year (see copy-year).
+    EventInput:
+      type: object
+      additionalProperties: false
+      required: [category, title, basis, start]
+      properties:
+        category: { type: string, description: Category key. }
+        title: { $ref: '#/components/schemas/Text' }
+        description: { $ref: '#/components/schemas/Text' }
+        basis: { type: string, enum: [AD, BS], description: Calendar of `start` and `end`. }
+        start: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+        end: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$', description: Inclusive; defaults to `start`; at most 366 days after it. }
+        allDay: { type: boolean, default: true }
+        startTime: { type: string, pattern: '^([01]\d|2[0-3]):[0-5]\d$', description: Required when allDay is false. }
+        endTime: { type: string, pattern: '^([01]\d|2[0-3]):[0-5]\d$' }
+        tz: { type: string, default: Asia/Kathmandu }
+        recurrence: { $ref: '#/components/schemas/Recurrence' }
+        rrule: { type: string, example: 'FREQ=WEEKLY;BYDAY=FR' }
+        recurUntil: { type: string, format: date, description: Last AD date on which an occurrence may start. }
+        isHoliday: { type: boolean, description: Overrides the category's holiday flag. }
+    EventPatch:
+      type: object
+      description: JSON Merge Patch of EventInput. `null` clears optional fields.
+      additionalProperties: false
+      properties:
+        category: { type: string }
+        title: { $ref: '#/components/schemas/Text' }
+        description: { type: object, nullable: true, allOf: [{ $ref: '#/components/schemas/Text' }] }
+        basis: { type: string, enum: [AD, BS] }
+        start: { type: string }
+        end: { type: string }
+        allDay: { type: boolean }
+        startTime: { type: string, nullable: true }
+        endTime: { type: string, nullable: true }
+        tz: { type: string }
+        recurrence: { $ref: '#/components/schemas/Recurrence' }
+        rrule: { type: string, nullable: true }
+        recurUntil: { type: string, nullable: true }
+        isHoliday: { type: boolean, nullable: true }
+    Event:
+      type: object
+      additionalProperties: false
+      required: [id, category, title, description, basis, start, end, ad, bs, allDay, startTime, endTime, tz, recurrence,
+                 rrule, recurUntil, isHoliday, status, version, createdBy, updatedBy, createdAt, updatedAt, deletedAt]
+      properties:
+        id: { type: string, format: uuid }
+        category: { type: string }
+        title: { $ref: '#/components/schemas/Text' }
+        description: { type: object, nullable: true, allOf: [{ $ref: '#/components/schemas/Text' }] }
+        basis: { type: string, enum: [AD, BS] }
+        start: { type: string, description: In the basis calendar. }
+        end: { type: string }
+        ad:
+          type: object
+          additionalProperties: false
+          required: [start, end]
+          description: AD range of the first occurrence.
+          properties:
+            start: { type: string, format: date }
+            end: { type: string, format: date }
+        bs:
+          type: object
+          additionalProperties: false
+          required: [start, end]
+          description: BS range of the first occurrence.
+          properties:
+            start: { $ref: '#/components/schemas/BSDate' }
+            end: { $ref: '#/components/schemas/BSDate' }
+        allDay: { type: boolean }
+        startTime: { type: string, nullable: true }
+        endTime: { type: string, nullable: true }
+        tz: { type: string }
+        recurrence: { $ref: '#/components/schemas/Recurrence' }
+        rrule: { type: string, nullable: true }
+        recurUntil: { type: string, format: date, nullable: true }
+        isHoliday: { type: boolean, nullable: true, description: Null inherits from the category. }
+        status: { type: string, enum: [draft, published, archived] }
+        version: { type: integer, description: Send as If-Match. }
+        createdBy: { type: string, format: uuid }
+        updatedBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time, nullable: true }
+    EventPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Event' } }
+        nextCursor: { type: string, nullable: true }
+    ImportReport:
+      type: object
+      additionalProperties: false
+      required: [dryRun, total, valid, invalid, duplicates, created, rows]
+      properties:
+        dryRun: { type: boolean }
+        total: { type: integer }
+        valid: { type: integer }
+        invalid: { type: integer }
+        duplicates: { type: integer }
+        created: { type: integer }
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [row, title, start, errors, duplicate]
+            properties:
+              row: { type: integer, description: CSV line number (the header is line 1). }
+              title: { type: string }
+              start: { type: string }
+              errors:
+                type: array
+                nullable: true
+                items: { $ref: '#/components/schemas/FieldError' }
+              duplicate: { type: boolean }
+    CopyYearInput:
+      type: object
+      additionalProperties: false
+      required: [fromBsYear, toBsYear]
+      properties:
+        fromBsYear: { type: integer, example: 2083 }
+        toBsYear: { type: integer, example: 2084 }
+        categories: { type: array, items: { type: string }, description: Limit to these category keys. }
+    CopyYearReport:
+      type: object
+      additionalProperties: false
+      required: [created, skipped]
+      properties:
+        created: { type: array, items: { type: string, format: uuid } }
+        skipped: { type: array, items: { $ref: '#/components/schemas/EventShift' } }
+    EventShift:
+      type: object
+      additionalProperties: false
+      required: [eventId, title, basis, start, oldAdStart]
+      properties:
+        eventId: { type: string, format: uuid }
+        title: { type: string }
+        basis: { type: string }
+        start: { type: string }
+        oldAdStart: { type: string }
+        newAdStart: { type: string }
+        problem: { type: string }
+
+    # ------------------------------------------------------------ admin: year table
+    YearView:
+      type: object
+      additionalProperties: false
+      required: [bsYear, adStart, adEnd, days, length, status, source]
+      properties:
+        bsYear: { type: integer }
+        adStart: { type: string, format: date }
+        adEnd: { type: string, format: date }
+        days: { type: array, minItems: 12, maxItems: 12, items: { type: integer } }
+        length: { type: integer }
+        status: { $ref: '#/components/schemas/YearStatus' }
+        source: { type: string }
+    YearList:
+      type: object
+      additionalProperties: false
+      required: [dataVersion, sha256, items]
+      properties:
+        dataVersion: { type: integer, format: int64 }
+        sha256: { type: string }
+        items: { type: array, items: { $ref: '#/components/schemas/YearView' } }
+    YearChange:
+      type: object
+      additionalProperties: false
+      required: [bsYear, days, status, source]
+      properties:
+        bsYear: { type: integer }
+        days: { type: array, minItems: 12, maxItems: 12, items: { type: integer, minimum: 29, maximum: 32 } }
+        status: { $ref: '#/components/schemas/YearStatus' }
+        source: { type: string, minLength: 1, maxLength: 500, description: Where the numbers come from. }
+        adStart: { type: string, format: date, description: "Only to move a year's start, or to add a year before the first." }
+    YearDraftInput:
+      type: object
+      additionalProperties: false
+      required: [changes]
+      properties:
+        changes: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/YearChange' } }
+        note: { type: string }
+    Issue:
+      type: object
+      additionalProperties: false
+      required: [severity, message]
+      properties:
+        year: { type: integer }
+        severity: { type: string, enum: [error, warning] }
+        message: { type: string }
+    YearDraft:
+      type: object
+      additionalProperties: false
+      required: [id, state, baseVersion, changes, note, warnings, impact, reason, createdBy, decidedBy, createdAt, decidedAt]
+      properties:
+        id: { type: string, format: uuid }
+        state: { type: string, enum: [pending, approved, rejected] }
+        baseVersion: { type: integer, format: int64 }
+        changes: { type: array, items: { $ref: '#/components/schemas/YearChange' } }
+        note: { type: string }
+        warnings: { type: array, items: { $ref: '#/components/schemas/Issue' } }
+        impact:
+          type: object
+          additionalProperties: false
+          required: [years, movedEvents, invalidEvents, eventsTruncated]
+          properties:
+            years:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [bsYear, before, after]
+                properties:
+                  bsYear: { type: integer }
+                  before: { type: object, nullable: true, allOf: [{ $ref: '#/components/schemas/YearView' }] }
+                  after: { $ref: '#/components/schemas/YearView' }
+            movedEvents: { type: array, items: { $ref: '#/components/schemas/EventShift' } }
+            invalidEvents: { type: array, items: { $ref: '#/components/schemas/EventShift' } }
+            eventsTruncated: { type: boolean }
+        reason: { type: string, nullable: true }
+        createdBy: { type: string, format: uuid }
+        decidedBy: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: string, format: date-time, nullable: true }
+    ReasonInput:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    # ------------------------------------------------------------ admin: UI config
+    Finding:
+      type: object
+      additionalProperties: false
+      required: [path, message]
+      properties:
+        path: { type: string, example: /theme/dark/text }
+        message: { type: string }
+    ValidationReport:
+      type: object
+      additionalProperties: false
+      required: [valid, errors, warnings]
+      properties:
+        valid: { type: boolean }
+        errors: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+        warnings: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+    UiConfigInput:
+      type: object
+      additionalProperties: false
+      required: [config]
+      properties:
+        config: { $ref: '#/components/schemas/UiConfigDocument' }
+        minClientVersion: { type: string, pattern: '^\d+\.\d+\.\d+$', default: 0.0.0, description: Older apps keep an earlier compatible version. }
+        note: { type: string, maxLength: 1000 }
+    UiConfigVersion:
+      type: object
+      additionalProperties: false
+      required: [app, version, status, origin, schemaVersion, minClientVersion, note, rejectReason, config, createdBy,
+                 approvedBy, createdAt, updatedAt, publishedAt]
+      properties:
+        app: { type: string }
+        version: { type: integer }
+        status: { type: string, enum: [draft, in_review, published, superseded, rolled_back, rejected], description: '`rolled_back` versions were replaced by an emergency rollback and are never offered to older apps.' }
+        origin: { type: string, enum: [draft, rollback] }
+        schemaVersion: { type: integer }
+        minClientVersion: { type: string }
+        note: { type: string, nullable: true }
+        rejectReason: { type: string, nullable: true }
+        config: { $ref: '#/components/schemas/UiConfigDocument' }
+        createdBy: { type: string, format: uuid }
+        approvedBy: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        publishedAt: { type: string, format: date-time, nullable: true }
+        validation: { $ref: '#/components/schemas/ValidationReport' }
+    UiConfigChannel:
+      type: object
+      additionalProperties: false
+      required: [app, stableVersion, candidateVersion, candidatePercent, updatedAt]
+      properties:
+        app: { type: string }
+        stableVersion: { type: integer, description: 0 means the built-in default. }
+        candidateVersion: { type: integer, nullable: true }
+        candidatePercent: { type: integer }
+        updatedAt: { type: string, format: date-time }
+    UiConfigList:
+      type: object
+      additionalProperties: false
+      required: [channel, items]
+      properties:
+        channel: { $ref: '#/components/schemas/UiConfigChannel' }
+        items: { type: array, items: { $ref: '#/components/schemas/UiConfigVersion' } }
+
+    # ------------------------------------------------------------ admin: platform
+    ApiClientInput:
+      type: object
+      additionalProperties: false
+      required: [name, kind]
+      properties:
+        name: { type: string, maxLength: 100, example: Marketing website }
+        kind: { type: string, enum: [public, server] }
+        allowedOrigins: { type: array, items: { type: string }, example: ['https://www.example.com'] }
+        ratePerMin: { type: integer, minimum: 1, maximum: 1000000, description: 'Default 600 (public) or 6000 (server).' }
+    ApiClient:
+      type: object
+      additionalProperties: false
+      required: [id, name, kind, keyPrefix, allowedOrigins, ratePerMin, revoked, lastUsedAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        kind: { type: string, enum: [public, server] }
+        keyPrefix: { type: string }
+        allowedOrigins: { type: array, items: { type: string } }
+        ratePerMin: { type: integer }
+        revoked: { type: boolean }
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    ApiClientCreated:
+      type: object
+      additionalProperties: false
+      required: [id, name, kind, keyPrefix, allowedOrigins, ratePerMin, revoked, lastUsedAt, createdAt, key]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        kind: { type: string, enum: [public, server] }
+        keyPrefix: { type: string }
+        allowedOrigins: { type: array, items: { type: string } }
+        ratePerMin: { type: integer }
+        revoked: { type: boolean }
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        key: { type: string, description: The full key. Shown once. }
+    WebhookInput:
+      type: object
+      additionalProperties: false
+      required: [url, topics]
+      properties:
+        url: { type: string, format: uri, description: 'https required unless ALLOW_PRIVATE_WEBHOOKS (development).' }
+        topics:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [events, categories, config, data] }
+    Webhook:
+      type: object
+      additionalProperties: false
+      required: [id, url, topics, active, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        topics: { type: array, items: { type: string } }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    WebhookCreated:
+      type: object
+      additionalProperties: false
+      required: [id, url, topics, active, createdAt, secret]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        topics: { type: array, items: { type: string } }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        secret: { type: string, description: HMAC signing secret (whsec_…). Shown once. }
+    WebhookEvent:
+      type: object
+      description: Body POSTed to webhook receivers.
+      required: [id, type, topic, at]
+      properties:
+        id: { type: string, example: evt_3f2a… }
+        type: { type: string, enum: [events.changed, categories.changed, config.changed, data.published] }
+        topic: { type: string, enum: [events, categories, config, data] }
+        tenantId: { type: string }
+        at: { type: string, format: date-time }
+        data: { type: object, additionalProperties: true }
+    WebhookDelivery:
+      type: object
+      additionalProperties: false
+      required: [id, eventType, attempts, state, lastError, nextRunAt, doneAt, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        eventType: { type: string }
+        attempts: { type: integer }
+        state: { type: string, enum: [pending, delivered, dead] }
+        lastError: { type: string, nullable: true }
+        nextRunAt: { type: string, format: date-time }
+        doneAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    AuditEntry:
+      type: object
+      additionalProperties: false
+      required: [id, at, actorId, actorEmail, actorIp, action, entity, entityId, before, after, requestId]
+      properties:
+        id: { type: integer, format: int64 }
+        at: { type: string, format: date-time }
+        actorId: { type: string, nullable: true }
+        actorEmail: { type: string, nullable: true }
+        actorIp: { type: string, nullable: true }
+        action: { type: string, example: event.publish }
+        entity: { type: string, example: event }
+        entityId: { type: string }
+        before: { type: object, nullable: true, additionalProperties: true, description: Snapshot before the change. }
+        after: { type: object, nullable: true, additionalProperties: true, description: Snapshot after the change. }
+        requestId: { type: string, nullable: true }
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+        nextCursor: { type: string, nullable: true }
+    DataHealth:
+      type: object
+      additionalProperties: false
+      required: [dataVersion, supportedRange, currentBsYear, firstProjectedBsYear, daysUntilProjected, nextYear, outbox]
+      properties:
+        dataVersion: { type: integer, format: int64 }
+        supportedRange: { $ref: '#/components/schemas/SupportedRange' }
+        currentBsYear: { type: integer }
+        firstProjectedBsYear: { type: integer, nullable: true }
+        daysUntilProjected: { type: integer, nullable: true, description: Alert when this drops below 90. }
+        nextYear:
+          type: object
+          additionalProperties: false
+          required: [bsYear]
+          properties:
+            bsYear: { type: integer }
+            startsOn: { type: string, format: date }
+            startsInDays: { type: integer }
+            status: { $ref: '#/components/schemas/YearStatus' }
+            publishedHolidays: { type: integer, description: Alert when 0 within 60 days of the new year. }
+        outbox:
+          type: object
+          additionalProperties: false
+          required: [pending, dead, oldestPendingAgeSeconds]
+          properties:
+            pending: { type: integer }
+            dead: { type: integer }
+            oldestPendingAgeSeconds: { type: number }

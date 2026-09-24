@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "defaults": {
+    "mode": "BS",
+    "locale": "ne",
+    "digits": "devanagari",
+    "weekStart": 0,
+    "weekendDays": [6],
+    "todayTimeZone": "device",
+    "colorScheme": "system"
+  },
+  "display": {
+    "allowModeSwitch": true,
+    "showSecondaryDate": true,
+    "showEventDots": true,
+    "maxDotsPerDay": 3,
+    "highlightHolidays": true,
+    "showProjectedWarning": false,
+    "views": ["month", "agenda"],
+    "monthHeaderFormat": "MMMM YYYY"
+  },
+  "theme": {
+    "light": {
+      "bg": "#FFFFFF", "surface": "#F6F7F9", "text": "#111827", "muted": "#4B5563",
+      "border": "#E5E7EB", "primary": "#1D4ED8", "onPrimary": "#FFFFFF",
+      "today": "#1D4ED8", "holiday": "#B91C1C", "weekend": "#B91C1C", "disabled": "#9CA3AF"
+    },
+    "dark": {
+      "bg": "#0B0F17", "surface": "#141A24", "text": "#F3F4F6", "muted": "#9CA3AF",
+      "border": "#273041", "primary": "#60A5FA", "onPrimary": "#0B0F17",
+      "today": "#60A5FA", "holiday": "#F87171", "weekend": "#F87171", "disabled": "#4B5563"
+    }
+  },
+  "shape": { "radius": 12, "density": "comfortable" },
+  "font": { "family": "system" }
+}

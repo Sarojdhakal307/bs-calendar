@@ -1,0 +1,27 @@
+{
+  "description": "Golden AD<->BS pairs. Each pair comes from a source independent of the primary seed table (source A). Only BS years with status 'verified' are included, because sources disagree on projected years.",
+  "cases": [
+    { "ad": "1918-04-13", "bs": "1975-01-01", "source": "nepcal v1.3.0 lower-bound constants", "note": "first supported day" },
+    { "ad": "1943-04-14", "bs": "2000-01-01", "source": "py-nepali REFERENCE_EN_DATE and tests/test_date_converter.py", "note": "1 Baisakh 2000" },
+    { "ad": "1944-01-01", "bs": "2000-09-17", "source": "py-nepali tests/test_date_converter.py", "note": "AD new year" },
+    { "ad": "1944-05-28", "bs": "2001-02-15", "source": "py-nepali tests/test_date_converter.py", "note": "" },
+    { "ad": "1994-08-13", "bs": "2051-04-29", "source": "py-nepali tests/test_date_converter.py", "note": "" },
+    { "ad": "2023-01-28", "bs": "2079-10-14", "source": "py-nepali tests/test_date_converter.py", "note": "" },
+    { "ad": "2024-03-28", "bs": "2080-12-15", "source": "py-nepali tests/test_date_converter.py", "note": "AD leap year" }
+  ],
+  "invalid": [
+    { "calendar": "BS", "date": "2079-00-04", "reason": "month 0" },
+    { "calendar": "BS", "date": "2079-13-04", "reason": "month 13" },
+    { "calendar": "BS", "date": "2079-01-00", "reason": "day 0" },
+    { "calendar": "BS", "date": "2079-01-40", "reason": "day 40" },
+    { "calendar": "BS", "date": "2083-03-33", "reason": "day 33 never exists" },
+    { "calendar": "AD", "date": "2023-02-29", "reason": "not a leap year" },
+    { "calendar": "AD", "date": "2023-13-01", "reason": "month 13" }
+  ],
+  "outOfRange": [
+    { "calendar": "BS", "date": "1974-12-30" },
+    { "calendar": "BS", "date": "2101-01-01" },
+    { "calendar": "AD", "date": "1918-04-12" },
+    { "calendar": "AD", "date": "2100-01-01" }
+  ]
+}

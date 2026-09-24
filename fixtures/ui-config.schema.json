@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bs-calendar.local/schemas/ui-config.v1.json",
+  "title": "Calendar UI configuration (schema v1)",
+  "description": "Admin-controlled options for the date picker and event calendar. The server rejects unknown fields; clients parse each field independently and fall back to defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "theme"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["AD", "BS"] },
+        "locale": { "enum": ["en", "ne"] },
+        "digits": { "enum": ["latin", "devanagari"] },
+        "weekStart": { "enum": [0, 1, 6] },
+        "weekendDays": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 6 },
+          "uniqueItems": true,
+          "maxItems": 3
+        },
+        "todayTimeZone": { "enum": ["device", "Asia/Kathmandu"] },
+        "colorScheme": { "enum": ["system", "light", "dark"] }
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowModeSwitch": { "type": "boolean" },
+        "showSecondaryDate": { "type": "boolean" },
+        "showEventDots": { "type": "boolean" },
+        "maxDotsPerDay": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "highlightHolidays": { "type": "boolean" },
+        "showProjectedWarning": { "type": "boolean" },
+        "views": {
+          "type": "array",
+          "items": { "enum": ["month", "agenda", "year"] },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "monthHeaderFormat": { "type": "string", "maxLength": 40, "pattern": "^[A-Za-z .,/-]+$" }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["light", "dark"],
+      "properties": {
+        "light": { "$ref": "#/$defs/palette" },
+        "dark": { "$ref": "#/$defs/palette" }
+      }
+    },
+    "shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "radius": { "type": "integer", "minimum": 0, "maximum": 24 },
+        "density": { "enum": ["compact", "comfortable", "spacious"] }
+      }
+    },
+    "font": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "family": { "enum": ["system", "inter", "noto-sans", "noto-sans-devanagari", "mukta"] }
+      }
+    }
+  },
+  "$defs": {
+    "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+    "palette": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bg", "surface", "text", "muted", "border", "primary", "onPrimary", "today", "holiday", "weekend", "disabled"],
+      "properties": {
+        "bg": { "$ref": "#/$defs/color" },
+        "surface": { "$ref": "#/$defs/color" },
+        "text": { "$ref": "#/$defs/color" },
+        "muted": { "$ref": "#/$defs/color" },
+        "border": { "$ref": "#/$defs/color" },
+        "primary": { "$ref": "#/$defs/color" },
+        "onPrimary": { "$ref": "#/$defs/color" },
+        "today": { "$ref": "#/$defs/color" },
+        "holiday": { "$ref": "#/$defs/color" },
+        "weekend": { "$ref": "#/$defs/color" },
+        "disabled": { "$ref": "#/$defs/color" }
+      }
+    }
+  }
+}
