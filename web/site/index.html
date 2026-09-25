@@ -12,9 +12,11 @@
   <header class="top">
     <div class="wrap nav">
       <a class="logo" href="/"><span class="logo-mark">बि</span> BS Calendar API</a>
-      <nav>
+      <button class="menu-btn" type="button" aria-label="Menu" aria-expanded="false" aria-controls="site-nav"><span></span></button>
+      <nav id="site-nav">
+        <a href="#converter">Converter</a>
+        <a href="#calendar">Calendar</a>
         <a href="#features">Features</a>
-        <a href="#how">How it works</a>
         <a href="#start">Quick start</a>
         <a href="/docs">Docs</a>
         <a class="btn small" href="/admin/">Admin</a>
@@ -33,8 +35,8 @@
             mobile app a date picker whose colours and defaults you control from one admin dashboard.
           </p>
           <div class="actions">
-            <a class="btn" href="/docs">Read the API docs</a>
-            <a class="btn ghost" href="/docs/try">Try it in the browser</a>
+            <a class="btn" href="#converter">Convert a date</a>
+            <a class="btn ghost" href="/docs">Read the docs</a>
           </div>
         </div>
         <div class="mock" aria-hidden="true">
@@ -45,6 +47,79 @@
           <div class="mock-grid" id="mock-grid"></div>
           <div class="mock-event"><span class="tag red"></span> Ghatasthapana <em>public holiday</em></div>
           <div class="mock-event"><span class="tag blue"></span> Team review <em>event</em></div>
+        </div>
+      </div>
+    </section>
+
+
+    <section id="converter" class="wrap">
+      <div class="section-head">
+        <h2>BS ⇄ AD date converter</h2>
+        <p class="sub">Pick a date in either calendar. Covers <span data-range>every year in the calendar table</span>.</p>
+      </div>
+      <div class="conv">
+        <form class="conv-card" id="conv-bs" autocomplete="off">
+          <div class="conv-label"><span class="pill red">BS</span> Bikram Sambat</div>
+          <div class="fields">
+            <label><span>Year</span><select name="year" aria-label="BS year"></select></label>
+            <label><span>Month</span><select name="month" aria-label="BS month"></select></label>
+            <label><span>Day</span><select name="day" aria-label="BS day"></select></label>
+          </div>
+          <button class="btn block" type="submit">Convert to AD →</button>
+        </form>
+
+        <button class="swap" type="button" id="conv-today" title="Use today's date">Today</button>
+
+        <form class="conv-card" id="conv-ad" autocomplete="off">
+          <div class="conv-label"><span class="pill blue">AD</span> Gregorian</div>
+          <div class="fields one">
+            <label><span>Date</span><input type="date" name="date" aria-label="AD date" required></label>
+          </div>
+          <button class="btn block alt" type="submit">← Convert to BS</button>
+        </form>
+      </div>
+
+      <div class="result" id="conv-result" aria-live="polite">
+        <p class="muted">Choose a date and press convert.</p>
+      </div>
+    </section>
+
+    <section id="calendar" class="band">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Calendar</h2>
+          <p class="sub">Browse any month, past or future, with holidays and events. Click a day to convert it.</p>
+        </div>
+        <div class="cal">
+          <div class="cal-bar">
+            <div class="cal-nav">
+              <button type="button" class="icon-btn" id="cal-prev" aria-label="Previous month">‹</button>
+              <button type="button" class="icon-btn" id="cal-next" aria-label="Next month">›</button>
+              <h3 class="cal-title" id="cal-title">…</h3>
+            </div>
+            <div class="cal-tools">
+              <select id="cal-month" aria-label="Month"></select>
+              <select id="cal-year" aria-label="Year"></select>
+              <button type="button" class="btn ghost small" id="cal-today">Today</button>
+              <div class="seg-btn" role="radiogroup" aria-label="Calendar">
+                <button type="button" role="radio" data-basis="BS" aria-checked="true">BS</button>
+                <button type="button" role="radio" data-basis="AD" aria-checked="false">AD</button>
+              </div>
+              <div class="seg-btn" role="radiogroup" aria-label="Language">
+                <button type="button" role="radio" data-lang="en" aria-checked="true">EN</button>
+                <button type="button" role="radio" data-lang="ne" aria-checked="false">ने</button>
+              </div>
+            </div>
+          </div>
+          <div class="cal-body">
+            <div class="cal-grid" id="cal-grid" role="grid" aria-labelledby="cal-title"></div>
+            <aside class="cal-side">
+              <div class="day-card" id="cal-day"></div>
+              <h4>This month</h4>
+              <ul class="ev-list" id="cal-events"><li class="muted">Loading…</li></ul>
+            </aside>
+          </div>
+          <p class="cal-note muted" id="cal-note"></p>
         </div>
       </div>
     </section>
@@ -140,13 +215,13 @@ export async function getToday() {
           </tbody>
         </table>
       </div>
-      <p class="more">Everything else, including request and response examples, is in the <a href="/docs">API reference</a>.</p>
+      <p class="more">Integration guides for React, Next.js and React Native are in the <a href="/docs">docs</a>; every endpoint is in the <a href="/docs/reference">API reference</a>.</p>
     </section>
 
     <section class="band">
       <div class="wrap links">
-        <a class="link-card" href="/docs"><strong>API reference</strong><span>Every endpoint, parameter and error code</span></a>
-        <a class="link-card" href="/docs/try"><strong>Try the API</strong><span>Send real requests from your browser</span></a>
+        <a class="link-card" href="/docs"><strong>Developer docs</strong><span>Guides and React, Next.js and React Native integration</span></a>
+        <a class="link-card" href="/docs/reference"><strong>API reference</strong><span>Every endpoint, parameter and error code</span></a>
         <a class="link-card" href="/admin/"><strong>Admin dashboard</strong><span>Events, holidays, theme, keys and users</span></a>
       </div>
     </section>

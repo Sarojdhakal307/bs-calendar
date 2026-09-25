@@ -528,7 +528,7 @@
           h('a', { class: 'btn', href: '#/calendar' }, 'Open calendar'),
           can('config:draft') ? h('a', { class: 'btn', href: '#/ui' }, 'Edit app theme') : null,
           can('platform:manage') ? h('a', { class: 'btn', href: '#/keys' }, 'Create API key') : null,
-          h('a', { class: 'btn', href: '/docs', target: '_blank', rel: 'noopener' }, 'API reference'))));
+          h('a', { class: 'btn', href: '/docs/reference', target: '_blank', rel: 'noopener' }, 'API reference'))));
   };
 
   // ------------------------------------------------------------------ calendar

@@ -12,7 +12,7 @@ Only Docker is required.
 docker compose up -d --build        # postgres → bootstrap (migrate + seed) → api + worker
 ```
 
-- API reference: http://localhost:8080/docs · try it: http://localhost:8080/docs/try
+- Developer guide: http://localhost:8080/docs · API reference: http://localhost:8080/docs/reference · try it: http://localhost:8080/docs/try
 - Development public key: `pk_dev_local_public_key_0001`
 - Development admin: `admin@example.com` / `change-me-please-now`
 
@@ -32,7 +32,7 @@ docker compose --profile test run --rm test       # all Go tests (including the 
 | [docs/react-native.md](docs/react-native.md) | Add them to a React Native (Expo) app |
 | [docs/deployment.md](docs/deployment.md) | Run it in production with Docker Compose, HTTPS, backups and updates |
 | [docs/api.md](docs/api.md) | Use the admin and public API: auth, every flow with commands, errors, webhooks |
-| [api/openapi.yaml](api/openapi.yaml) | Exact API contract (also served at `/docs`) |
+| [api/openapi.yaml](api/openapi.yaml) | Exact API contract (also served at `/docs/reference`) |
 | [docs/architecture.md](docs/architecture.md), [docs/flow.md](docs/flow.md), [docs/reliable.md](docs/reliable.md) | Design, diagrams, and correctness and operations detail |
 
 ## Repository layout

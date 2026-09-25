@@ -298,9 +298,17 @@ func TestAPIFlow(t *testing.T) {
 		if !bytes.Equal(r.body, api.OpenAPI) {
 			t.Fatal("served spec differs from api/openapi.yaml")
 		}
-		for _, p := range []string{"/docs", "/docs/try"} {
+		for _, p := range []string{"/docs/reference", "/docs/try"} {
 			res, err := http.Get(h.ts.URL + p)
 			if err != nil || res.StatusCode != 200 || !strings.Contains(res.Header.Get("Content-Security-Policy"), "cdn.jsdelivr.net") {
+				t.Fatalf("%s: %v %v", p, err, res)
+			}
+			res.Body.Close()
+		}
+		// The website's own routes work without an API key.
+		for _, p := range []string{"/site/v1/info", "/site/v1/convert?bs=2083-06-08", "/site/v1/months/BS/2083/6?include=events"} {
+			res, err := http.Get(h.ts.URL + p)
+			if err != nil || res.StatusCode != 200 {
 				t.Fatalf("%s: %v %v", p, err, res)
 			}
 			res.Body.Close()

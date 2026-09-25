@@ -13,7 +13,7 @@ func TestFrontRoutesOnePort(t *testing.T) {
 	s := &Server{cfg: config.Config{AppEnv: config.EnvDevelopment}, metrics: NewMetrics(), log: discardLogger()}
 	api := http.NewServeMux()
 	api.HandleFunc("GET /v1/today", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("api:" + r.URL.Path)) })
-	api.HandleFunc("GET /docs", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("docs")) })
+	api.HandleFunc("GET /docs/reference", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("reference")) })
 	h := s.base(s.front(api))
 
 	cases := []struct {
@@ -28,7 +28,10 @@ func TestFrontRoutesOnePort(t *testing.T) {
 		{"/api", "", "", 301},
 		{"/api/v1/today", "api:/v1/today", "", 200},
 		{"/v1/today", "api:/v1/today", "", 200},
-		{"/docs", "docs", "", 200},
+		{"/docs", "<title>BS Calendar API · Docs</title>", "text/html", 200},
+		{"/docs/", "<title>BS Calendar API · Docs</title>", "text/html", 200},
+		{"/docs/reference", "reference", "", 200},
+		{"/site/v1/info", "", "", 404},
 		{"/nope", "", "", 404},
 	}
 	for _, c := range cases {
@@ -44,7 +47,7 @@ func TestFrontRoutesOnePort(t *testing.T) {
 		if c.wantCT != "" && !strings.Contains(rec.Header().Get("Content-Type"), c.wantCT) {
 			t.Errorf("%s: content type %q", c.path, rec.Header().Get("Content-Type"))
 		}
-		if strings.HasPrefix(c.path, "/admin/") || c.path == "/" {
+		if strings.HasPrefix(c.path, "/admin/") || c.path == "/" || c.path == "/docs" {
 			if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "script-src 'self'") {
 				t.Errorf("%s: static pages need their own CSP", c.path)
 			}

@@ -146,6 +146,19 @@ func (s *Server) public(h handlerFunc) handlerFunc {
 	}
 }
 
+// site serves the embedded website's own calls. They need no API key (the site cannot hold a
+// secret), so they are limited to a few read-only routes and a per-IP rate.
+func (s *Server) site(h handlerFunc) handlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		ri := info(r)
+		ri.tenantID = s.tenantID
+		if err := s.limit(w, s.ipLim, "site|"+ri.ip, 300); err != nil {
+			return err
+		}
+		return h(w, r)
+	}
+}
+
 // admin authenticates a bearer token and checks a permission.
 func (s *Server) admin(perm auth.Permission, h handlerFunc) handlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
@@ -184,8 +197,13 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /healthz", s.wrap(s.healthz))
 	m.HandleFunc("GET /readyz", s.wrap(s.readyz))
 	m.HandleFunc("GET /openapi.yaml", s.wrap(s.openapi))
-	m.HandleFunc("GET /docs", s.wrap(s.docsRedoc))
+	m.HandleFunc("GET /docs/reference", s.wrap(s.docsRedoc))
 	m.HandleFunc("GET /docs/try", s.wrap(s.docsSwagger))
+
+	// The public website's converter and calendar (no key; read-only, limited per IP).
+	m.HandleFunc("GET /site/v1/info", s.wrap(s.site(s.getSiteInfo)))
+	m.HandleFunc("GET /site/v1/convert", s.wrap(s.site(s.getConvert)))
+	m.HandleFunc("GET /site/v1/months/{basis}/{year}/{month}", s.wrap(s.site(s.getMonth)))
 
 	// Public read API (API key).
 	m.HandleFunc("GET /v1/manifest", s.wrap(s.public(s.getManifest)))

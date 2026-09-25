@@ -26,7 +26,8 @@ docker compose up -d --build
 
 | URL | What |
 |-----|------|
-| http://localhost:8080/docs | API reference |
+| http://localhost:8080/docs | Developer guide and integrations |
+| http://localhost:8080/docs/reference | API reference |
 | http://localhost:8080/docs/try | Try the API in the browser |
 | http://localhost:9090/metrics | Prometheus metrics |
 

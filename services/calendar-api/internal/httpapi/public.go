@@ -361,6 +361,40 @@ func convertEpoch(t *bscal.Table, n int64) (conversion, error) {
 	}, nil
 }
 
+type siteRange struct {
+	BS      rangeInfo  `json:"bs"`
+	AD      rangeInfo  `json:"ad"`
+	Today   conversion `json:"today"`
+	Version int64      `json:"dataVersion"`
+}
+
+type rangeInfo struct {
+	Min string `json:"min"`
+	Max string `json:"max"`
+}
+
+// getSiteInfo tells the website which dates the year table covers, and what today is in Nepal.
+func (s *Server) getSiteInfo(w http.ResponseWriter, r *http.Request) error {
+	t := s.data.Table()
+	lo, hi := t.EpochRange()
+	minBS, err := t.EpochToBS(lo)
+	if err != nil {
+		return err
+	}
+	maxBS, err := t.EpochToBS(hi)
+	if err != nil {
+		return err
+	}
+	today, err := convertEpoch(t, bscal.NepalTodayEpoch(s.now()))
+	if err != nil {
+		return err
+	}
+	out := siteRange{BS: rangeInfo{minBS.String(), maxBS.String()},
+		AD: rangeInfo{bscal.EpochToAD(lo).String(), bscal.EpochToAD(hi).String()}, Today: today, Version: t.Version()}
+	writeJSON(w, r, http.StatusOK, out, "public, max-age=60", "")
+	return nil
+}
+
 func (s *Server) getConvert(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
 	ad, bs := q.Get("ad"), q.Get("bs")

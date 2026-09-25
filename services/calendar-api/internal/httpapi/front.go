@@ -18,7 +18,7 @@ const staticCSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 //	/          website (embedded web/site)
 //	/api/...   the API, with the /api prefix removed (/api/v1/today -> /v1/today)
 //	/admin/    admin dashboard (embedded web/admin)
-//	/docs      API reference (served by the mux)
+//	/docs      developer guide (embedded web/site/docs.html); /docs/reference and /docs/try come from the mux
 //
 // Everything else (/v1/..., /openapi.yaml, /healthz, /readyz) goes to the mux unchanged, because API
 // responses contain links such as /v1/calendar/data/12.
@@ -36,6 +36,12 @@ func (s *Server) front(api http.Handler) http.Handler {
 			r2.URL.Path = strings.TrimPrefix(p, "/api")
 			r2.URL.RawPath = ""
 			api.ServeHTTP(w, r2)
+		case (p == "/docs" || p == "/docs/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+			info(r).route = "/docs"
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = "/docs.html"
+			r2.URL.RawPath = ""
+			site.ServeHTTP(w, r2)
 		case strings.HasPrefix(p, "/admin/"):
 			info(r).route = "/admin/"
 			admin.ServeHTTP(w, r)
