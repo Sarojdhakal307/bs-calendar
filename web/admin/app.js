@@ -32,6 +32,8 @@
   // Every API call goes through /api (the web container strips it before the API sees the request).
   const API = '/api';
 
+  const $root = document.getElementById('root');
+
   // ------------------------------------------------------------------ state and storage
   const S = { access: null, refresh: null, expAt: 0, me: null, categories: null, years: null, allEvents: null };
   const cal = { mode: 'BS', y: 0, m: 0 };
