@@ -325,8 +325,9 @@ func (s *Service) Approve(ctx context.Context, actor audit.Actor, id string) (Dr
 		if err := tx.QueryRow(ctx, `SELECT snapshot FROM calendar_data_versions WHERE version = $1`, version).Scan(&raw); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE calendar_year_drafts SET state = 'approved', decided_by = $2, decided_at = now() WHERE id = $1`,
-			id, actor.UserID); err != nil {
+		// self_approved is only reachable for super admins (checked above); the DB rejects it otherwise.
+		if _, err := tx.Exec(ctx, `UPDATE calendar_year_drafts SET state = 'approved', decided_by = $2, decided_at = now(),
+			self_approved = $3 WHERE id = $1`, id, actor.UserID, d.CreatedBy == actor.UserID); err != nil {
 			return err
 		}
 		if err := audit.Write(ctx, tx, audit.Actor{UserID: actor.UserID, IP: actor.IP, RequestID: actor.RequestID},

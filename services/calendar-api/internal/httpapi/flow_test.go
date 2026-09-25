@@ -720,6 +720,15 @@ func TestAPIFlow(t *testing.T) {
 		if h.a.Data.Table().Version() != 2 {
 			t.Fatal("in-memory table not reloaded")
 		}
+		// A super admin may approve their own draft (single-admin installations).
+		r = h.do(t, req{method: "POST", path: "/v1/admin/years/drafts", headers: bearer(admin), body: map[string]any{
+			"changes": []any{map[string]any{"bsYear": 2084, "days": y2084, "status": "verified", "source": "Super admin own draft (test)"}}}})
+		expect(t, r, 201)
+		r = h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + get(r.obj(t), "id").(string) + "/approve", headers: bearer(admin)})
+		expect(t, r, 200)
+		if get(r.obj(t), "state") != "approved" {
+			t.Fatalf("super admin self-approval: %s", r.body)
+		}
 	})
 
 	t.Run("ui config: validate, review, staged rollout, rollback", func(t *testing.T) {
@@ -762,6 +771,11 @@ func TestAPIFlow(t *testing.T) {
 		}
 		r = h.do(t, req{method: "GET", path: "/v1/ui-config/mobile/1", headers: key(pubKey)})
 		expect(t, r, 200)
+
+		// A super admin may approve their own version (separate app, so mobile's versions are unaffected).
+		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/ui-configs/kiosk", headers: bearer(admin), body: map[string]any{"config": cfg}}), 201)
+		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/ui-configs/kiosk/1/submit", headers: bearer(admin)}), 200)
+		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/ui-configs/kiosk/1/approve", headers: bearer(admin)}), 200)
 
 		// v2: rejected in review.
 		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/ui-configs/mobile", headers: bearer(designer1), body: map[string]any{"config": cfg}}), 201)

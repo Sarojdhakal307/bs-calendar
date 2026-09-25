@@ -116,11 +116,12 @@ if [ "$SMOKE_WRITE" = "true" ]; then
   call GET /v1/admin/years -H "Authorization: Bearer $TOKEN"; expect 200 "list years"
   Y=$(field "[.items[] | select(.status == \"projected\")][0].bsYear")
   DAYS=$(field "[.items[] | select(.bsYear == $Y)][0].days | tostring")
-  call POST /v1/admin/years/drafts "{\"changes\":[{\"bsYear\":$Y,\"days\":$DAYS,\"status\":\"projected\",\"source\":\"smoke test $RUN (no change)\"}]}" -H "Authorization: Bearer $TOKEN"
+  # A calendar admin proposes; super admins may approve their own drafts, calendar admins may not.
+  call POST /v1/admin/years/drafts "{\"changes\":[{\"bsYear\":$Y,\"days\":$DAYS,\"status\":\"projected\",\"source\":\"smoke test $RUN (no change)\"}]}" -H "Authorization: Bearer $APPROVER"
   expect 201 "propose draft for BS $Y"
   DRAFT=$(field .id)
-  call POST "/v1/admin/years/drafts/$DRAFT/approve" -H "Authorization: Bearer $TOKEN"; expect 403 "author cannot approve (four-eyes)"
-  call POST "/v1/admin/years/drafts/$DRAFT/reject" '{"reason":"smoke test"}' -H "Authorization: Bearer $APPROVER"; expect 200 "second admin rejects"
+  call POST "/v1/admin/years/drafts/$DRAFT/approve" -H "Authorization: Bearer $APPROVER"; expect 403 "author cannot approve (four-eyes)"
+  call POST "/v1/admin/years/drafts/$DRAFT/reject" '{"reason":"smoke test"}' -H "Authorization: Bearer $TOKEN"; expect 200 "another admin rejects"
 
   step "7. UI config review and rollout (§6.6)"
   APP="smoke-$RUN"
