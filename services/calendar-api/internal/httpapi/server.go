@@ -91,7 +91,7 @@ func New(d Deps) *Server {
 }
 
 // Handler returns the root handler with middleware applied.
-func (s *Server) Handler() http.Handler { return s.base(s.cors(s.mux)) }
+func (s *Server) Handler() http.Handler { return s.base(s.cors(s.front(s.mux))) }
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request) error
 
@@ -186,7 +186,6 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /openapi.yaml", s.wrap(s.openapi))
 	m.HandleFunc("GET /docs", s.wrap(s.docsRedoc))
 	m.HandleFunc("GET /docs/try", s.wrap(s.docsSwagger))
-	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/docs", http.StatusFound) })
 
 	// Public read API (API key).
 	m.HandleFunc("GET /v1/manifest", s.wrap(s.public(s.getManifest)))

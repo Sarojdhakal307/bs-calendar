@@ -76,7 +76,7 @@ type Config struct {
 func (c Config) IsProduction() bool { return c.AppEnv == EnvProduction }
 
 // Known development defaults that must never reach production.
-var devMarkers = []string{"dev-only", "change-me", "_dev_", "example.com"}
+var devMarkers = []string{"dev-only", "change-me", "change_me", "_dev_", "example.com"}
 
 // Load reads configuration. When forServe is true, secrets needed by the HTTP server are required.
 func Load(forServe bool) (Config, error) {

@@ -47,14 +47,15 @@ func TestProductionAcceptsHardenedConfig(t *testing.T) {
 
 func TestProductionRefusesDevelopmentShortcuts(t *testing.T) {
 	cases := map[string]map[string]string{
-		"dev JWT key":        {"JWT_SIGNING_KEY": "dev-only-jwt-signing-key-change-me-0123456789abcdef"},
-		"dev webhook key":    {"WEBHOOK_SECRET_KEY": "dev-only-webhook-encryption-key-change-me-0123456789"},
-		"dev admin password": {"BOOTSTRAP_ADMIN_PASSWORD": "change-me-please-now"},
-		"dev API key":        {"BOOTSTRAP_PUBLIC_KEY": "pk_dev_local_public_key_0001"},
-		"private webhooks":   {"ALLOW_PRIVATE_WEBHOOKS": "true"},
-		"no API key":         {"REQUIRE_API_KEY": "false"},
-		"http base URL":      {"PUBLIC_BASE_URL": "http://calendar-api.example.org"},
-		"bad CIDR":           {"ADMIN_ALLOWED_CIDRS": "10.0.0.0/33"},
+		"dev JWT key":         {"JWT_SIGNING_KEY": "dev-only-jwt-signing-key-change-me-0123456789abcdef"},
+		"placeholder JWT key": {"JWT_SIGNING_KEY": "CHANGE_ME_64_hex_characters_from_openssl_rand_hex_32_aaaaaaaa"},
+		"dev webhook key":     {"WEBHOOK_SECRET_KEY": "dev-only-webhook-encryption-key-change-me-0123456789"},
+		"dev admin password":  {"BOOTSTRAP_ADMIN_PASSWORD": "change-me-please-now"},
+		"dev API key":         {"BOOTSTRAP_PUBLIC_KEY": "pk_dev_local_public_key_0001"},
+		"private webhooks":    {"ALLOW_PRIVATE_WEBHOOKS": "true"},
+		"no API key":          {"REQUIRE_API_KEY": "false"},
+		"http base URL":       {"PUBLIC_BASE_URL": "http://calendar-api.example.org"},
+		"bad CIDR":            {"ADMIN_ALLOWED_CIDRS": "10.0.0.0/33"},
 	}
 	for name, override := range cases {
 		t.Run(name, func(t *testing.T) {

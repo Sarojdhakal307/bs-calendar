@@ -21,3 +21,6 @@ Thumbs.db
 
 # Production env file and local backups (deploy/compose)
 deploy/compose/backups/
+
+# Server data folder for docker-image/ (database, backups, certificates)
+Dockerdata/

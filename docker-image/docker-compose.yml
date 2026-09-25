@@ -1,0 +1,98 @@
+# BS/AD Calendar API on one server, using the published image
+# ghcr.io/sarojdhakal307/calendar-api. See README.md in this folder.
+#
+#   docker compose --env-file .env.server up -d
+
+name: bs-calendar
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
+
+x-app: &app
+  image: ghcr.io/sarojdhakal307/calendar-api:${VERSION:-v1.1.0}
+  env_file: [.env.server]
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging: *logging
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-calendar_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.server}
+      POSTGRES_DB: calendar
+      CALENDAR_OWNER_PASSWORD: ${CALENDAR_OWNER_PASSWORD:?set CALENDAR_OWNER_PASSWORD in .env.server}
+      CALENDAR_APP_PASSWORD: ${CALENDAR_APP_PASSWORD:?set CALENDAR_APP_PASSWORD in .env.server}
+    volumes:
+      - ./Dockerdata/postgres:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro   # first start only
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d calendar"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging: *logging
+
+  # Runs on every start: migrations + seed data, then exits.
+  bootstrap:
+    <<: *app
+    command: ["bootstrap"]
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # One image, one port: / website, /api API, /admin dashboard, /docs API reference.
+  # Listens only on this machine; nginx on the server (or your browser locally) connects to it.
+  api:
+    <<: *app
+    command: ["serve"]
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+    stop_grace_period: 40s
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    environment:
+      METRICS_ADDR: ":9091"
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+
+  # Daily database dump into ./Dockerdata/backups (kept 14 days).
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-calendar_admin}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: calendar
+      BACKUP_KEEP_DAYS: "14"
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - ./Dockerdata/backups:/backups
+    depends_on:
+      postgres: { condition: service_healthy }
+    logging: *logging
+
+# All persistent data lives in ./Dockerdata (bind mounts; back this folder up):
+#   ./Dockerdata/postgres       database files
+#   ./Dockerdata/backups        daily pg_dump files
