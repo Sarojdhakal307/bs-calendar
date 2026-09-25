@@ -1,6 +1,6 @@
 # BS/AD Calendar Platform — Flows
 
-> **Status:** v1. Server-side flows (sections 3, 4, 8, 9, 10, 12, 13, 14, 16) are implemented; client-side flows describe the planned TypeScript packages. · **Last updated:** 2026-09-25
+> **Status:** v1. Server-side flows (sections 3, 4, 8, 9, 10, 12, 13, 14, 16) are implemented. Clients call the API directly (web.md, react-native.md); the client-side sync flows (sections 2, 5-7, 11, 15, 17) describe the optional fully offline design. · **Last updated:** 2026-09-25
 > **Related:** [api.md](api.md) (the same flows as runnable commands) · [architecture.md](architecture.md) (components and data model) · [reliable.md](reliable.md) (failure handling and tests)
 
 This document shows **how data and actions move** through the system. Diagrams use Mermaid, which renders on GitHub, GitLab and in VS Code with a Mermaid extension.
@@ -131,7 +131,7 @@ flowchart TD
 
 ## 4. Date conversion
 
-Identical logic in Go (`internal/bscal`) and TypeScript (`bs-core`).
+The logic in Go (`internal/bscal`); an offline client would port it unchanged.
 
 ```mermaid
 flowchart TD
@@ -297,7 +297,7 @@ sequenceDiagram
   participant APP as Mobile app
 
   Ed->>ADM: fill form, basis BS, bilingual title
-  ADM->>ADM: live preview using calendar-web
+  ADM->>ADM: live preview
   ADM->>API: POST /v1/admin/events as draft
   API->>API: validate dates exist in year table, recurrence caps
   API->>DB: insert event, materialise AD range, audit row
@@ -604,7 +604,7 @@ flowchart LR
   PUB --> DEMO["Demo apps upgrade and run E2E"]
 ```
 
-The bundled snapshot inside `bs-core` is refreshed from the production year table on every release. Apps built from older versions still receive newer data through sync.
+An offline app bundles `calendar-api snapshot` output and refreshes it on every release; older builds still receive newer data through the manifest.
 
 ## 18. Yearly operations cycle
 

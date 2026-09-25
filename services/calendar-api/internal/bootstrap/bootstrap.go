@@ -23,12 +23,14 @@ import (
 
 // Run migrates and seeds the database.
 func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
-	pool, err := store.Open(ctx, cfg.DatabaseURL, log)
+	// Migrations and seeding run as the owner role (MIGRATION_DATABASE_URL); the API itself
+	// can then use a least-privileged role (deploy/postgres/roles.sql).
+	pool, err := store.Open(ctx, store.Options{URL: cfg.MigrationDatabaseURL, MaxConns: 4}, log)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
-	if err := store.Migrate(ctx, cfg.DatabaseURL, "up", log); err != nil {
+	if err := store.Migrate(ctx, cfg.MigrationDatabaseURL, "up", log); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	return Seed(ctx, pool, cfg, log)

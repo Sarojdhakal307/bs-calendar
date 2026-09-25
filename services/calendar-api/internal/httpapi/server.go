@@ -6,7 +6,9 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,6 +56,26 @@ type Server struct {
 	loginLim  *limiterSet
 	adminLim  *limiterSet
 	mux       *http.ServeMux
+	draining  atomic.Bool
+}
+
+// SetDraining makes /readyz fail so load balancers stop sending new requests before shutdown.
+func (s *Server) SetDraining() { s.draining.Store(true) }
+
+// adminNetworkAllowed applies ADMIN_ALLOWED_CIDRS to every admin route, including login.
+func (s *Server) adminNetworkAllowed(r *http.Request) error {
+	if len(s.cfg.AdminAllowedCIDRs) == 0 {
+		return nil
+	}
+	if ip, err := netip.ParseAddr(info(r).ip); err == nil {
+		ip = ip.Unmap()
+		for _, p := range s.cfg.AdminAllowedCIDRs {
+			if p.Contains(ip) {
+				return nil
+			}
+		}
+	}
+	return apperr.Forbidden(apperr.CodeForbidden, "The admin API is not reachable from this network.")
 }
 
 // New builds the server and registers routes.
@@ -111,7 +133,13 @@ func (s *Server) public(h handlerFunc) handlerFunc {
 			return apperr.Forbidden(apperr.CodeOriginNotAllowed, "This API key is not allowed from origin "+origin+".")
 		}
 		ri.client, ri.tenantID = &c, c.TenantID
-		if err := s.limit(w, s.clientLim, c.ID, c.RatePerMin); err != nil {
+		// A public key is shared by every install of an app, so its limit applies per client IP;
+		// a server key belongs to one backend, so its limit applies to the key as a whole.
+		limitKey := c.ID
+		if c.Kind == "public" {
+			limitKey = c.ID + "|" + ri.ip
+		}
+		if err := s.limit(w, s.clientLim, limitKey, c.RatePerMin); err != nil {
 			return err
 		}
 		return h(w, r)
@@ -121,6 +149,9 @@ func (s *Server) public(h handlerFunc) handlerFunc {
 // admin authenticates a bearer token and checks a permission.
 func (s *Server) admin(perm auth.Permission, h handlerFunc) handlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
+		if err := s.adminNetworkAllowed(r); err != nil {
+			return err
+		}
 		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || tok == "" {
 			return apperr.Unauthorized(apperr.CodeUnauthorized, "Send an access token: Authorization: Bearer <token>.")
@@ -261,6 +292,9 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) error {
 	}
 	if !s.data.Loaded() {
 		checks["calendarData"], status = "not loaded", http.StatusServiceUnavailable
+	}
+	if s.draining.Load() {
+		checks["shutdown"], status = "draining", http.StatusServiceUnavailable
 	}
 	st := "ready"
 	if status != http.StatusOK {

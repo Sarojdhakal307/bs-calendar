@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"bscalendar/services/calendar-api/internal/apperr"
 	"bscalendar/services/calendar-api/internal/audit"
@@ -28,6 +29,9 @@ func list[T any](items []T) map[string]any {
 // ---- auth ------------------------------------------------------------------------
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) error {
+	if err := s.adminNetworkAllowed(r); err != nil {
+		return err
+	}
 	if err := s.limit(w, s.loginLim, info(r).ip, 10); err != nil {
 		return err
 	}
@@ -36,6 +40,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) error {
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
+		return err
+	}
+	// A per-account limit slows guessing spread across many IPs.
+	if err := s.limit(w, s.loginLim, "email:"+strings.ToLower(strings.TrimSpace(body.Email)), 5); err != nil {
 		return err
 	}
 	pair, err := s.auth.Login(r.Context(), body.Email, body.Password, info(r).ip, r.UserAgent())
@@ -47,6 +55,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) refresh(w http.ResponseWriter, r *http.Request) error {
+	if err := s.adminNetworkAllowed(r); err != nil {
+		return err
+	}
 	if err := s.limit(w, s.loginLim, "refresh:"+info(r).ip, 60); err != nil {
 		return err
 	}

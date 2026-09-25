@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,17 +32,34 @@ type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// Options configure the connection pool.
+type Options struct {
+	URL              string
+	MaxConns         int32         // 0 keeps the URL/default value (at least 10)
+	StatementTimeout time.Duration // 0 disables; protects the pool from runaway queries
+}
+
 // Open connects to Postgres, retrying until ctx is done so containers can start in any order.
-func Open(ctx context.Context, url string, log *slog.Logger) (*pgxpool.Pool, error) {
-	cfg, err := pgxpool.ParseConfig(url)
+func Open(ctx context.Context, o Options, log *slog.Logger) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(o.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
+		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
-	if cfg.MaxConns < 10 {
+	if o.MaxConns > 0 {
+		cfg.MaxConns = o.MaxConns
+	} else if cfg.MaxConns < 10 {
 		cfg.MaxConns = 10
 	}
+	if o.StatementTimeout > 0 {
+		ms := strconv.FormatInt(o.StatementTimeout.Milliseconds(), 10)
+		cfg.ConnConfig.RuntimeParams["statement_timeout"] = ms
+		cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = strconv.FormatInt(2*o.StatementTimeout.Milliseconds(), 10)
+	}
+	cfg.ConnConfig.RuntimeParams["application_name"] = "calendar-api"
 	cfg.MaxConnIdleTime = 5 * time.Minute
+	cfg.MaxConnLifetime = time.Hour
 	cfg.HealthCheckPeriod = 30 * time.Second
+
 	backoff := 500 * time.Millisecond
 	for attempt := 1; ; attempt++ {
 		pool, err := pgxpool.NewWithConfig(ctx, cfg)
@@ -169,4 +187,51 @@ func IsNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 // EscapeLike escapes % and _ for use in LIKE/ILIKE patterns.
 func EscapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// LatestMigration returns the highest migration version embedded in this binary.
+func LatestMigration() (int64, error) {
+	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	if err != nil {
+		return 0, err
+	}
+	var latest int64
+	for _, e := range entries {
+		num, _, ok := strings.Cut(e.Name(), "_")
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseInt(num, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("migration %s: bad version prefix", e.Name())
+		}
+		latest = max(latest, v)
+	}
+	return latest, nil
+}
+
+// CheckSchema fails when the database is behind this binary. It is read-only (it never
+// creates goose's table), so it works with the least-privileged application role.
+func CheckSchema(ctx context.Context, q Querier) error {
+	want, err := LatestMigration()
+	if err != nil {
+		return err
+	}
+	var have int64
+	err = q.QueryRow(ctx, `SELECT COALESCE(max(version_id), 0) FROM goose_db_version WHERE is_applied`).Scan(&have)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "42P01" { // undefined_table
+		return fmt.Errorf("database has no schema; run `calendar-api bootstrap` first")
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case have < want:
+		return fmt.Errorf("database schema is at migration %d but this build needs %d; run `calendar-api bootstrap` (or `migrate up`) before starting the new version", have, want)
+	case have > want:
+		// A newer build migrated already (expand/contract keeps old builds working): allowed.
+		return nil
+	}
+	return nil
 }

@@ -1,0 +1,36 @@
+# TLS-terminating reverse proxy for the single-VM stack. Caddy obtains and renews certificates
+# automatically (Let's Encrypt) for {$DOMAIN}. For DOMAIN=localhost it uses its own local CA.
+{
+	email {$ACME_EMAIL:ops@invalid.example}
+	# If a CDN or another proxy sits in front of this VM, trust it so client IPs survive:
+	# servers {
+	# 	trusted_proxies static <cdn-ip-ranges>
+	# }
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Metrics stay on the internal network (scrape api:9090 and worker:9091 directly).
+	@metrics path /metrics
+	respond @metrics 404
+
+	reverse_proxy api:8080 {
+		# Deploys restart the api containers; hold requests until one is back instead of failing.
+		lb_try_duration 10s
+		lb_try_interval 250ms
+		# Passive health checking: skip an upstream for 10 s after it fails.
+		fail_duration 10s
+		max_fails 1
+		unhealthy_status 503
+	}
+
+	header {
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

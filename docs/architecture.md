@@ -2,7 +2,7 @@
 
 > **Status:** v1 · **Last updated:** 2026-09-24
 > **Implemented:** the Go service (`services/calendar-api`), the OpenAPI contract, Docker Compose and CI.
-> **Planned:** the TypeScript packages (§10) and the Next.js admin panel (§12).
+> **Clients:** call the API directly (docs/web.md, docs/react-native.md). **Planned:** an admin web UI (§12).
 > **Related:** [api.md](api.md) (using and managing the API) · [flow.md](flow.md) (how things move) · [reliable.md](reliable.md) (how we keep it correct and available)
 
 ---
@@ -14,7 +14,7 @@ An API-controlled calendar platform that gives every app and website in the orga
 - A **date picker** that switches between **AD** (Gregorian) and **BS** (Bikram Sambat), with **light and dark** themes.
 - An **event calendar** that shows public holidays, festivals and custom events.
 - An **admin panel** where staff manage the BS year data, events, categories, and the look and behaviour of the calendar UI.
-- **Reusable packages** for **React Native** (Expo and bare) and **React / Next.js**.
+- **Copy-paste integrations** for **React Native** (Expo and bare) and **React / Next.js** that call the API directly.
 - A **Go service** that is the single source of truth for all of the above.
 
 ## 2. Goals and non-goals
@@ -23,12 +23,12 @@ An API-controlled calendar platform that gives every app and website in the orga
 
 | # | Goal |
 |---|------|
-| G1 | Correct AD⇄BS conversion for every day in the supported range, identical on server, web and mobile. |
-| G2 | Date picker and calendar work **offline** and never wait on the network to render. |
+| G1 | Correct AD⇄BS conversion for every day in the supported range. |
+| G2 | Apps stay usable on bad networks (cached months; optional fully offline mode, §10). |
 | G3 | Admin changes (events, year data, theme) reach apps **without an app release**. |
-| G4 | One component API for web and native, with most code shared. |
+| G4 | The same small client code on web and React Native. |
 | G5 | Every admin action is validated, versioned, audited and reversible. |
-| G6 | Works in Next.js App Router with SSR, and in Expo Go (no required native modules). |
+| G6 | Runs anywhere with Docker; works with Next.js (including server rendering) and Expo Go. |
 
 **Non-goals for v1**
 
@@ -92,8 +92,8 @@ flowchart LR
   end
   CDN["CDN edge cache"]
   subgraph Consumers
-    WEB["Next.js websites<br/>calendar-web"]
-    APP["React Native apps<br/>calendar-native"]
+    WEB["Websites<br/>React / Next.js"]
+    APP["Mobile apps<br/>React Native"]
     SRV["Other backends<br/>REST"]
     ICS["Google / Apple Calendar<br/>ICS feed"]
   end
@@ -117,10 +117,8 @@ flowchart LR
 | **Outbox worker** | Delivers webhooks and CDN purges reliably with retries. Runs from the same binary (`--worker`). |
 | **PostgreSQL** | Year table, events, categories, UI configs, API clients, audit log, outbox. |
 | **CDN** | Serves almost all public reads: immutable versioned URLs plus a short-TTL manifest. |
-| **bs-core** (TS) | Pure conversion, month grid, formatting, parsing, Nepali digits. Zero dependencies. |
-| **calendar-headless** | React hooks: picker/calendar state, sync, theme resolution. Shared by web and native. |
-| **calendar-web / calendar-native** | Thin rendering layers over the headless hooks. |
-| **Admin panel** | Next.js app using the same `calendar-web` package, so previews are the real component. |
+| **Web and mobile clients** | Call the public API with `fetch` (docs/web.md, docs/react-native.md). |
+| **Admin panel** (planned) | A web UI over the admin API; until then use `/docs/try` or curl. |
 
 ## 6. Repository layout
 
@@ -147,9 +145,7 @@ bs-calendar/
 ├─ docker-compose.yml · Makefile · .env.example · redocly.yaml
 ├─ .github/workflows/ci.yml
 ├─ docs/                           # api.md, architecture.md, flow.md, reliable.md
-├─ packages/                       # planned: bs-core, calendar-headless, calendar-web, calendar-native, api-client, theme
-├─ apps/                           # planned: admin (Next.js), demo-web, demo-native
-└─ tools/parity/                   # planned: Go vs TS full-range comparison (Go side: `calendar-api dump`)
+└─ (no JavaScript packages: clients call the API directly, see docs/web.md and docs/react-native.md)
 ```
 
 ## 7. Go service
@@ -320,7 +316,7 @@ func CivilFromDays(z int64) (int, int, int) {
 reorders keys and clients in other languages cannot reproduce JSON bytes reliably. The text form is
 checked end to end by the smoke test (it recomputes the checksum with `jq` and `sha256sum`).
 
-The TypeScript engine in `bs-core` will be a line-by-line port that uses `Math.floor` and never `Date`.
+An offline client would port this arithmetic line by line (using `Math.floor`, never `Date`); `calendar-api dump` prints every day for a parity check.
 
 ### 7.4 Year table service and hot reload
 
@@ -506,150 +502,22 @@ Recurring occurrences have ids like `<eventId>@<adDate>`.
 | UI config | `POST /ui-configs/validate` · `GET/POST /ui-configs/{app}` · `GET/PATCH /ui-configs/{app}/{version}` · `POST …/{version}/submit` · `/approve` · `/reject` · `POST /ui-configs/{app}/rollout` · `/rollback` |
 | Platform | `GET/POST /api-clients` · `DELETE /api-clients/{id}` · `GET/POST /webhooks` · `DELETE /webhooks/{id}` · `GET /webhooks/{id}/deliveries` · `GET/POST /users` · `PATCH /users/{id}` · `GET /audit` · `GET /health/data` |
 
-## 10. Client packages
+## 10. Clients (web and React Native)
 
-### 10.1 `bs-core` (pure TypeScript, zero dependencies)
+Websites and apps call the public API directly with `fetch`; no SDK is required.
 
-```ts
-export type CivilDate = { year: number; month: number; day: number }; // month 1..12
-export type CalendarMode = 'AD' | 'BS';
-export type EpochDay = number; // days since 1970-01-01
+| Guide | Contents |
+|-------|----------|
+| [web.md](web.md) | Shared API client, React date picker and event calendar, admin-controlled theme with light/dark, Next.js server rendering and webhook refresh |
+| [react-native.md](react-native.md) | The same client and hooks, a bottom-sheet date picker, native light/dark theme, refresh on foreground, offline cache |
 
-export interface YearInfo { y: number; start: string; days: number[]; status: 'verified' | 'projected' }
-export interface CalendarData { version: number; years: YearInfo[] }
+The picker draws each month from `GET /v1/months/{AD|BS}/{year}/{month}?include=events`, whose 42 cells
+already contain both dates, so clients never convert dates themselves.
 
-export interface Converter {
-  readonly version: number;
-  readonly range: { min: EpochDay; max: EpochDay };
-  toBS(ad: CivilDate): CivilDate;             // throws OutOfRangeError / InvalidDateError
-  toAD(bs: CivilDate): CivilDate;
-  fromEpochDay(n: EpochDay, mode: CalendarMode): CivilDate;
-  toEpochDay(d: CivilDate, mode: CalendarMode): EpochDay;
-  daysInMonth(mode: CalendarMode, year: number, month: number): number;
-  status(bsYear: number): 'verified' | 'projected' | undefined;
-}
-
-export function createConverter(data: CalendarData): Converter;
-export function monthGrid(conv: Converter, mode: CalendarMode, year: number, month: number,
-                          weekStart: 0 | 1 | 6): GridCell[]; // always 42 cells
-export function format(d: CivilDate, mode: CalendarMode, pattern: string, locale: 'en' | 'ne'): string;
-export function parse(input: string, mode: CalendarMode, pattern: string): CivilDate | null;
-export function toNepaliDigits(s: string): string;
-export function todayEpochDay(tz: 'device' | 'Asia/Kathmandu'): EpochDay; // Nepal = UTC + 345 min
-export { default as bundledData } from './data/snapshot.json';
-```
-
-- Size target: **under 10 KB gzipped**, including the bundled year table.
-- `sideEffects: false`, ESM + CJS builds via `tsup`.
-
-### 10.2 `calendar-headless` (React hooks, no DOM or RN imports)
-
-| Hook | Returns |
-|------|---------|
-| `useCalendarData()` | `{ converter, status, dataVersion, refresh }` from the sync engine. |
-| `useCalendarConfig(app)` | Resolved UI config: defaults merged with the server config, parsed per field with Zod `.catch()`. |
-| `useResolvedTheme()` | `{ scheme: 'light' \| 'dark', tokens }` following the order in §11.2. |
-| `useDatePicker(opts)` | `{ mode, setMode, visible, next, prev, goTo, grid, select, isSelected, isDisabled, getCellProps, value }` |
-| `useRangePicker(opts)` | As above, plus `start`, `end` and `hover`. |
-| `useEventCalendar(opts)` | `{ view, grid, eventsByDay: Map<EpochDay, Event[]>, loading, … }` |
-
-The internal selection is an `EpochDay`. The value emitted to the app is:
-
-```ts
-type DateValue = { ad: string; bs: string; mode: CalendarMode; epochDay: number };
-```
-
-### 10.3 `calendar-web`
-
-- Components: `CalendarProvider`, `DatePicker`, `DateRangePicker`, `Calendar` (inline), `EventCalendar` (month + agenda), `CalendarModeToggle`.
-- All components are `'use client'` and never touch `window` at import time.
-- **Theming uses CSS variables** (`--cal-bg`, `--cal-text`, `--cal-primary`…). With `colorScheme="system"`, both palettes are emitted, the dark one inside `@media (prefers-color-scheme: dark)`, so server-rendered HTML is correct before hydration with no flash.
-- Accessibility follows the ARIA `grid` pattern. Keys: arrows move by day, PageUp/PageDown by month, Shift+PageUp/PageDown by year, Home/End to week start/end, Enter/Space selects, Esc closes. Labels announce the date in both calendars.
-- Popover positioning uses `@floating-ui/react`.
-
-### 10.4 `calendar-native`
-
-- Same component names and props as web.
-- Picker presentation: `modal` (a bottom sheet built on RN `Modal` + `Animated`) or `inline`.
-- Theming: `useColorScheme()` + `Appearance` listener; tokens become a memoised `StyleSheet`.
-- **No required native modules**, so it works in Expo Go. Month swiping uses `PanResponder`. `react-native-gesture-handler` and `reanimated` are optional enhancers when present.
-- The year list uses `FlatList` with `getItemLayout` for instant jumps.
-
-### 10.5 `api-client`
-
-- Types generated by `openapi-typescript`; requests via `openapi-fetch`.
-- **Sync engine** (details in [flow.md](flow.md#3-sync-engine)): runs on start, on foreground (`AppState` / `visibilitychange`), on manual refresh and every 15 minutes. It is throttled to one run per 60 seconds and uses exponential backoff with jitter.
-- Storage adapters: `asyncStorage` (RN default), `mmkv` (optional), `indexedDb` (web default), `localStorage` (fallback), `memory` (tests and SSR).
-- A server entry (`api-client/server`) for Next.js server components passes `next: { tags, revalidate }` through to `fetch`.
-
-### 10.6 Usage
-
-**Next.js (App Router)**
-
-```tsx
-// app/providers.tsx
-'use client';
-import { CalendarProvider } from '@org/calendar-web';
-import { bundledData } from '@org/bs-core';
-
-export function Providers({ children }: { children: React.ReactNode }) {
-  return (
-    <CalendarProvider
-      apiUrl={process.env.NEXT_PUBLIC_CAL_API!}
-      apiKey={process.env.NEXT_PUBLIC_CAL_KEY!}   // public key: identifies the app, not a secret
-      app="web"
-      fallbackData={bundledData}
-      colorScheme="system"
-    >
-      {children}
-    </CalendarProvider>
-  );
-}
-```
-
-```tsx
-// app/holidays/page.tsx (server component)
-import { createServerClient } from '@org/api-client/server';
-import { EventCalendar } from '@org/calendar-web';
-
-export default async function Page() {
-  const cal = createServerClient({ apiUrl: process.env.CAL_API!, apiKey: process.env.CAL_SERVER_KEY! });
-  const events = await cal.bucket(2083, { next: { tags: ['cal:events'], revalidate: 3600 } });
-  return <EventCalendar initialEvents={events} defaultMode="BS" />;
-}
-```
-
-```ts
-// app/api/calendar-revalidate/route.ts
-import { revalidateTag } from 'next/cache';
-import { verifyWebhook } from '@org/api-client/server';
-
-export async function POST(req: Request) {
-  const body = await verifyWebhook(req, process.env.CAL_WEBHOOK_SECRET!); // HMAC + timestamp check
-  for (const topic of body.topics) revalidateTag(`cal:${topic}`); // check your Next.js version's signature
-  return Response.json({ ok: true });
-}
-```
-
-**React Native (Expo or bare)**
-
-```tsx
-import { useState } from 'react';
-import { CalendarProvider, DatePicker, EventCalendar, type DateValue } from '@org/calendar-native';
-import { asyncStorage } from '@org/api-client/storage';
-import { bundledData } from '@org/bs-core';
-
-export default function App() {
-  const [value, setValue] = useState<DateValue | null>(null);
-  return (
-    <CalendarProvider apiUrl={API} apiKey={KEY} app="mobile" storage={asyncStorage}
-                      fallbackData={bundledData} colorScheme="system">
-      <DatePicker defaultMode="BS" allowModeSwitch value={value} onChange={setValue} locale="ne" />
-      <EventCalendar view="month" onEventPress={(e) => router.push(`/event/${e.id}`)} />
-    </CalendarProvider>
-  );
-}
-```
+**Optional, for fully offline apps:** download the year table (`/v1/calendar/data/latest`, about 10 KB),
+verify its checksum, and convert on the device with the epoch-day arithmetic of §7.3. The manifest tells
+the app when the table, config or events change. This path is designed (flow.md §2-3) but not packaged
+as a library.
 
 ## 11. UI configuration and theming
 
@@ -716,7 +584,7 @@ Each field is parsed independently. An invalid or unknown value falls back to th
 
 ## 12. Admin panel
 
-**Stack:** Next.js App Router, TanStack Query, react-hook-form + Zod, shadcn/ui, Monaco (JSON view), Auth.js with OIDC. It imports `calendar-web`, so previews use the real component.
+**Stack:** Next.js App Router, TanStack Query, react-hook-form + Zod, shadcn/ui, Monaco (JSON view), Auth.js with OIDC.
 
 | Page | Key features |
 |------|--------------|
@@ -762,7 +630,7 @@ Each field is parsed independently. An invalid or unknown value falls back to th
 |-------|--------|
 | Local | `docker compose up -d --build`: Postgres, one-shot `bootstrap`, `api`, `worker`; profiles for `smoke`, `webhook-sink` and `test`. |
 | Container | Multi-stage build into `gcr.io/distroless/static-debian12:nonroot` with a built-in `HEALTHCHECK`. |
-| Runtime | 2+ API replicas behind a load balancer (Fly.io, Cloud Run, ECS or Kubernetes). Workers can scale out: rows are claimed with `FOR UPDATE SKIP LOCKED` and a 5-minute lease. |
+| Runtime | 2+ API replicas behind a load balancer (Docker Compose behind Caddy; see docs/deployment.md). Workers can scale out: rows are claimed with `FOR UPDATE SKIP LOCKED` and a 5-minute lease. |
 | Database | Managed PostgreSQL with point-in-time recovery. |
 | CDN | Cloudflare or similar in front of public `/v1/*` GETs; admin routes bypass it. Responses `Vary` on `X-Api-Key` and `Origin`. |
 | Migrations | `calendar-api bootstrap` as a pre-deploy job (idempotent, advisory-locked), following expand → migrate → contract. |
@@ -774,8 +642,8 @@ Each field is parsed independently. An invalid or unknown value falls back to th
 
 | Decision | Chosen | Alternatives considered | Reason |
 |----------|--------|-------------------------|--------|
-| Where conversion runs | Client **and** server, same algorithm | Server only | Offline, zero latency, no per-tap network calls. |
-| Cross-platform UI | Headless hooks + two thin renderers | react-native-web, Tamagui | Lighter Next.js bundles, clean SSR, native feel on mobile. |
+| Where conversion runs | Server (month grids and conversions come from the API) | Client SDK with a bundled table | Simplest clients; an offline client remains possible (§10). |
+| Cross-platform UI | One shared fetch client and two hooks; web and native components written per platform | A packaged component library | No packages to publish or version; native look on each platform. |
 | Internal date type | Epoch day integer | JS `Date`, Luxon, dayjs | No time-zone bugs, simple maths, identical in Go and TS. |
 | Sync model | Manifest + immutable versioned resources | Per-client delta feed, websockets | Near-total CDN hit rate, trivial rollback, simple clients. |
 | Event distribution | BS-year buckets, version = sum of monotonic counters | Arbitrary range queries; per-year bumps to a horizon | Cacheable, small, predictable; no stale far-future buckets. |
@@ -790,12 +658,12 @@ Each field is parsed independently. An invalid or unknown value falls back to th
 | Phase | Deliverable | Status |
 |-------|-------------|--------|
 | 0 | Source and verify the year table; golden fixtures; OpenAPI; UI config schema | **Done**, except the official-calendar check of verified years (reliable.md §3.1) |
-| 1 | `bscal` (Go) passing the fixtures; `bs-core` (TS) and the parity job | Go **done** (`calendar-api dump` feeds parity); TS planned |
+| 1 | `bscal` (Go) passing the fixtures | **Done** |
 | 2 | Go public + admin API, Postgres, manifest and buckets, caching, ICS, webhooks, Compose, CI | **Done** |
-| 3 | Headless hooks, web `DatePicker` and `EventCalendar`, Next.js demo | Planned (2–3 weeks) |
-| 4 | React Native components, Expo demo | Planned (2 weeks) |
+| 3 | Web and React Native integration guides with a date picker, event calendar and theme | **Done** (docs/web.md, docs/react-native.md) |
+| 4 | Production Docker deployment (Caddy HTTPS, least-privilege database, backups, zero-downtime updates) | **Done** (docs/deployment.md) |
 | 5 | Admin panel UI on top of the existing admin API | Planned (3 weeks) |
-| 6 | Hardening: load tests, OpenTelemetry, alerts, npm release | Planned (1–2 weeks) |
+| 6 | Load tests, OpenTelemetry, alert rules | Planned |
 
 ## 17. Open decisions
 

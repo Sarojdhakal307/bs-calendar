@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # Build and test output
 /bin/
@@ -18,7 +19,5 @@ coverage.*
 .DS_Store
 Thumbs.db
 
-# Future TypeScript packages
-node_modules/
-.next/
-.turbo/
+# Production env file and local backups (deploy/compose)
+deploy/compose/backups/

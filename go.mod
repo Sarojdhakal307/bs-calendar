@@ -2,6 +2,10 @@ module bscalendar
 
 go 1.26.0
 
+// Build with a patched toolchain: older 1.26.x releases have standard-library CVEs
+// (govulncheck in CI fails on them). Bump this when a new patch release ships.
+toolchain go1.26.8
+
 require (
 	github.com/getkin/kin-openapi v0.149.0
 	github.com/golang-jwt/jwt/v5 v5.3.1

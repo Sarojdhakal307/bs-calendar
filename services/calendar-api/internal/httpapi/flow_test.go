@@ -141,7 +141,7 @@ func setup(t *testing.T) *harness {
 	if err := store.Migrate(ctx, dbURL, "up", log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	pool, err := store.Open(ctx, dbURL, log)
+	pool, err := store.Open(ctx, store.Options{URL: dbURL}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
