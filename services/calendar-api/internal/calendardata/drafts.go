@@ -256,7 +256,7 @@ func (s *Service) ListDrafts(ctx context.Context, state string) ([]Draft, error)
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Draft, error) { return scanDraft(r) })
 }
 
-// Approve applies a pending draft. The approver must not be the author (four-eyes rule).
+// Approve applies a pending draft. The approver must not be the author (four-eyes rule) unless they are a super admin.
 // Approval re-validates against the current table, refuses if any event date would stop
 // existing, publishes a new data version, re-materialises events and notifies replicas.
 func (s *Service) Approve(ctx context.Context, actor audit.Actor, id string) (Draft, error) {
@@ -279,8 +279,8 @@ func (s *Service) Approve(ctx context.Context, actor audit.Actor, id string) (Dr
 		if d.State != "pending" {
 			return apperr.InvalidState("The draft is already " + d.State + ".")
 		}
-		if d.CreatedBy == actor.UserID {
-			return apperr.Forbidden(apperr.CodeFourEyes, "A different calendar admin must approve this change.")
+		if d.CreatedBy == actor.UserID && !actor.CanSelfApprove() {
+			return apperr.Forbidden(apperr.CodeFourEyes, "A different calendar admin (or a super admin) must approve this change.")
 		}
 		base, err := loadYears(ctx, tx, true)
 		if err != nil {

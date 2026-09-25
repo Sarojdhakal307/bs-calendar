@@ -364,8 +364,8 @@ func (s *Service) Approve(ctx context.Context, actor audit.Actor, app string, ve
 		if cur.Status != "in_review" {
 			return apperr.InvalidState("Only versions in review can be approved.")
 		}
-		if cur.CreatedBy == actor.UserID {
-			return apperr.Forbidden(apperr.CodeFourEyes, "A different designer must approve this version.")
+		if cur.CreatedBy == actor.UserID && !actor.CanSelfApprove() {
+			return apperr.Forbidden(apperr.CodeFourEyes, "A different designer (or a super admin) must approve this version.")
 		}
 		if rep := s.Validate(cur.Config); !rep.Valid {
 			return apperr.Validation().With("report", rep)

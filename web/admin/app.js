@@ -1056,6 +1056,7 @@
   }
   function openDraft(d, onDone) {
     const mine = d.createdBy === S.me.id;
+    const selfBlocked = mine && S.me.role !== 'super_admin';
     const imp = d.impact;
     const body = h('div', { class: 'stack' },
       h('div', { class: 'row' }, statusBadge(d.state), h('span', { class: 'muted small' }, `Based on data version ${d.baseVersion} · created ${fmtDT(d.createdAt)}${mine ? ' by you' : ''}`)),
@@ -1082,8 +1083,8 @@
       } });
     }
     if (d.state === 'pending' && can('years:approve')) {
-      actions.push({ label: mine ? 'Approve (needs another admin)' : 'Approve and publish', class: 'primary', onClick: async () => {
-        if (mine) throw new ApiError(403, { title: 'Another calendar admin must approve this.', detail: 'Four-eyes rule: the author cannot approve their own change.' });
+      actions.push({ label: selfBlocked ? 'Approve (needs another admin)' : 'Approve and publish', class: 'primary', onClick: async () => {
+        if (selfBlocked) throw new ApiError(403, { title: 'Another calendar admin must approve this.', detail: 'Four-eyes rule: the author cannot approve their own change.' });
         if (!(await confirmBox('Publish this year-table change? Apps pick up the new data on their next sync, and event dates are recalculated.', { okLabel: 'Approve and publish' }))) return false;
         await api('POST', `/v1/admin/years/drafts/${d.id}/approve`);
         S.years = null; eventsChanged();

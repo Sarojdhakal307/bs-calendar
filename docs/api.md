@@ -336,7 +336,7 @@ DRAFT=$(curl -s -X POST $API/v1/admin/years/drafts -H "Authorization: Bearer $TO
 echo "$DRAFT" | jq '.state, .warnings, .impact.movedEvents, .impact.invalidEvents'
 DRAFT_ID=$(echo "$DRAFT" | jq -r .id)
 
-# 2. The author cannot approve: 403 FOUR_EYES_REQUIRED
+# 2. The author cannot approve (403 FOUR_EYES_REQUIRED), unless the author is a super admin
 curl -s -X POST $API/v1/admin/years/drafts/$DRAFT_ID/approve -H "Authorization: Bearer $TOKEN" | jq .code
 # 3. A second calendar admin approves: new data version, every replica reloads, webhooks go out
 curl -s -X POST $API/v1/admin/years/drafts/$DRAFT_ID/approve -H "Authorization: Bearer $APPROVER" | jq .state

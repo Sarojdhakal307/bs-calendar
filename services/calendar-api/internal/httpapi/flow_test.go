@@ -690,7 +690,13 @@ func TestAPIFlow(t *testing.T) {
 		expect(t, h.do(t, req{method: "GET", path: "/v1/admin/years/drafts/" + draft, headers: bearer(viewer)}), 200)
 		r = h.do(t, req{method: "GET", path: "/v1/admin/years/drafts?state=pending", headers: bearer(viewer)})
 		expect(t, r, 200)
-		expectProblem(t, h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + draft + "/approve", headers: bearer(admin)}), 403, "FOUR_EYES_REQUIRED")
+		// Four-eyes: a calendar admin cannot approve their own draft (a super admin can).
+		r = h.do(t, req{method: "POST", path: "/v1/admin/years/drafts", headers: bearer(approver), body: map[string]any{
+			"changes": []any{map[string]any{"bsYear": 2084, "days": y2084, "status": "verified", "source": "Own draft (test)"}}}})
+		expect(t, r, 201)
+		ownDraft := get(r.obj(t), "id").(string)
+		expectProblem(t, h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + ownDraft + "/approve", headers: bearer(approver)}), 403, "FOUR_EYES_REQUIRED")
+		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + ownDraft + "/reject", headers: bearer(approver), body: map[string]string{"reason": "test only"}}), 200)
 		expectProblem(t, h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + draft + "/approve", headers: bearer(designer1)}), 403, "FORBIDDEN")
 		r = h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + draft + "/approve", headers: bearer(approver)})
 		expect(t, r, 200)

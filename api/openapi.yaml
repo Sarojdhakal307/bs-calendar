@@ -949,7 +949,7 @@ paths:
       tags: [Admin year table]
       summary: Approve and publish a draft (four-eyes)
       description: |
-        The approver must not be the author (`403 FOUR_EYES_REQUIRED`). Approval re-validates against the
+        The approver must not be the author (`403 FOUR_EYES_REQUIRED`) unless they are a super admin. Approval re-validates against the
         current table, refuses if any event would fall on a date that no longer exists (`409` with
         `invalidEvents`), publishes a new data version, re-materialises events, notifies every replica
         and enqueues `data.published` webhooks.
