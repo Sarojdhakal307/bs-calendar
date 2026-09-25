@@ -18,7 +18,7 @@ func TestFrontRoutesOnePort(t *testing.T) {
 
 	cases := []struct {
 		path, wantBody, wantCT string
-		wantCode             int
+		wantCode               int
 	}{
 		{"/", "<title>BS Calendar API</title>", "text/html", 200},
 		{"/site.js", "", "javascript", 200},
