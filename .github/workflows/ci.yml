@@ -27,7 +27,7 @@ jobs:
           --health-interval 3s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           # Always the newest 1.26 patch: govulncheck fails on standard-library CVEs
           # fixed in patch releases (go.mod pins the minimum with its toolchain line).
