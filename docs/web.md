@@ -1,8 +1,8 @@
 # Using the calendar on the web (React / Next.js)
 
 This guide builds an **AD/BS date picker** and an **event calendar** for a website, driven entirely by the
-API. No extra packages: only `fetch` and React. The same `calendar-api.ts` file is reused in the
-[React Native guide](react-native.md).
+API. No extra packages: only `fetch` and React. The same `calendar-api.ts` and `use-calendar.ts` files are
+reused in the [Expo guide](expo-date-picker.md).
 
 **Before you start**
 
