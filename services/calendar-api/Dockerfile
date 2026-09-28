@@ -2,7 +2,7 @@
 # Build context: repository root (the service embeds /api and /fixtures).
 #   docker build -f services/calendar-api/Dockerfile -t bs-calendar/calendar-api .
 
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOFLAGS=-buildvcs=false
 COPY go.mod go.sum ./
