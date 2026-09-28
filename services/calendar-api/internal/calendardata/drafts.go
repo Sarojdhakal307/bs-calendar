@@ -256,7 +256,7 @@ func (s *Service) ListDrafts(ctx context.Context, state string) ([]Draft, error)
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Draft, error) { return scanDraft(r) })
 }
 
-// Approve applies a pending draft. The approver must not be the author (four-eyes rule).
+// Approve applies a pending draft. The approver must not be the author (four-eyes rule) unless they are a super admin.
 // Approval re-validates against the current table, refuses if any event date would stop
 // existing, publishes a new data version, re-materialises events and notifies replicas.
 func (s *Service) Approve(ctx context.Context, actor audit.Actor, id string) (Draft, error) {
@@ -279,8 +279,8 @@ func (s *Service) Approve(ctx context.Context, actor audit.Actor, id string) (Dr
 		if d.State != "pending" {
 			return apperr.InvalidState("The draft is already " + d.State + ".")
 		}
-		if d.CreatedBy == actor.UserID {
-			return apperr.Forbidden(apperr.CodeFourEyes, "A different calendar admin must approve this change.")
+		if d.CreatedBy == actor.UserID && !actor.CanSelfApprove() {
+			return apperr.Forbidden(apperr.CodeFourEyes, "A different calendar admin (or a super admin) must approve this change.")
 		}
 		base, err := loadYears(ctx, tx, true)
 		if err != nil {
@@ -325,8 +325,9 @@ func (s *Service) Approve(ctx context.Context, actor audit.Actor, id string) (Dr
 		if err := tx.QueryRow(ctx, `SELECT snapshot FROM calendar_data_versions WHERE version = $1`, version).Scan(&raw); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE calendar_year_drafts SET state = 'approved', decided_by = $2, decided_at = now() WHERE id = $1`,
-			id, actor.UserID); err != nil {
+		// self_approved is only reachable for super admins (checked above); the DB rejects it otherwise.
+		if _, err := tx.Exec(ctx, `UPDATE calendar_year_drafts SET state = 'approved', decided_by = $2, decided_at = now(),
+			self_approved = $3 WHERE id = $1`, id, actor.UserID, d.CreatedBy == actor.UserID); err != nil {
 			return err
 		}
 		if err := audit.Write(ctx, tx, audit.Actor{UserID: actor.UserID, IP: actor.IP, RequestID: actor.RequestID},

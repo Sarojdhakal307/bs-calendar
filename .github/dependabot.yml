@@ -1,0 +1,15 @@
+# Keeps Go modules, the Docker base images and GitHub Actions patched.
+# CI (including govulncheck) must pass before merging.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      go-deps: { patterns: ["*"] }
+  - package-ecosystem: docker
+    directory: /services/calendar-api
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

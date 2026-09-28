@@ -1,7 +1,7 @@
 # BS/AD Calendar API — Developer Guide
 
 > **Status:** v1, implemented in `services/calendar-api` · **Last updated:** 2026-09-24
-> **Contract:** [`api/openapi.yaml`](../api/openapi.yaml) (browse it at `http://localhost:8080/docs`, try it at `/docs/try`)
+> **Contract:** [`api/openapi.yaml`](../api/openapi.yaml) (browse it at `http://localhost:8080/docs/reference`, try it at `/docs/try`)
 > **Related:** [architecture.md](architecture.md) · [flow.md](flow.md) · [reliable.md](reliable.md) · [API changelog](../api/CHANGELOG.md)
 
 This guide explains how to **use** the API (every flow, with runnable commands) and how the API is **managed** (how it changes without breaking apps). The OpenAPI file is the source of truth for exact fields; this guide explains how the pieces fit together.
@@ -34,7 +34,8 @@ docker compose up -d --build    # postgres → bootstrap (migrate + seed) → ap
 | What | Where |
 |------|-------|
 | API | `http://localhost:8080` |
-| API reference (Redoc) | `http://localhost:8080/docs` |
+| Developer guide and integrations | `http://localhost:8080/docs` |
+| API reference (Redoc) | `http://localhost:8080/docs/reference` |
 | Try-it console (Swagger UI) | `http://localhost:8080/docs/try` |
 | OpenAPI document | `http://localhost:8080/openapi.yaml` |
 | Prometheus metrics | `http://localhost:9090/metrics` (API), worker on `:9091` inside the network |
@@ -336,7 +337,7 @@ DRAFT=$(curl -s -X POST $API/v1/admin/years/drafts -H "Authorization: Bearer $TO
 echo "$DRAFT" | jq '.state, .warnings, .impact.movedEvents, .impact.invalidEvents'
 DRAFT_ID=$(echo "$DRAFT" | jq -r .id)
 
-# 2. The author cannot approve: 403 FOUR_EYES_REQUIRED
+# 2. The author cannot approve (403 FOUR_EYES_REQUIRED), unless the author is a super admin
 curl -s -X POST $API/v1/admin/years/drafts/$DRAFT_ID/approve -H "Authorization: Bearer $TOKEN" | jq .code
 # 3. A second calendar admin approves: new data version, every replica reloads, webhooks go out
 curl -s -X POST $API/v1/admin/years/drafts/$DRAFT_ID/approve -H "Authorization: Bearer $APPROVER" | jq .state
@@ -555,7 +556,7 @@ The API is managed **contract-first**: `api/openapi.yaml` is designed and review
 4. **Extend the flow test** (`internal/httpapi/flow_test.go`). It validates every request and response against the spec, and it **fails if any operation in the spec is never called**, so new endpoints cannot ship undocumented or untested.
 5. **Check compatibility.** CI runs `oasdiff breaking` against `main`; a breaking change fails the build (see 11.2).
 6. **Record it** in [`api/CHANGELOG.md`](../api/CHANGELOG.md) and bump `info.version` (semver: minor for additions, patch for docs/fixes).
-7. **Release.** The server embeds the spec, so `/openapi.yaml` and `/docs` always describe the running build.
+7. **Release.** The server embeds the spec, so `/openapi.yaml` and `/docs/reference` always describe the running build.
 
 ### 11.2 Compatibility rules for `/v1`
 

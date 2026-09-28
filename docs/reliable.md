@@ -107,7 +107,7 @@ Time-zone bugs are the most common calendar bug. These rules are mandatory.
 
 | # | Rule | Enforcement |
 |---|------|-------------|
-| T1 | Calendar dates are civil dates: `{year, month, day}` or an epoch day integer. Never `Date` or `time.Time`. | ESLint `no-restricted-syntax` bans `new Date(` and `Date.parse` in `bs-core` and `calendar-headless`. A Go `forbidigo` lint bans `time.Time` in `bscal`. |
+| T1 | Calendar dates are civil dates: `{year, month, day}` or an epoch day integer. Never `Date` or `time.Time`. | Go: `bscal` uses only integer epoch days (review rule; a `forbidigo` lint can enforce it). Clients: use the `ad`/`bs` strings from the API as they are (docs/web.md §8). |
 | T2 | Only `todayEpochDay()` may read the clock. | Code review + lint allow-list. |
 | T3 | "Nepal today" = `floor((Date.now() + 345 * 60_000) / 86_400_000)`. Nepal has no DST. | Unit test at several UTC instants around Nepal midnight. |
 | T4 | Timed events store `start_time`, `end_time` and `tz`. Display converts to device time only if the app opts in. | Schema + component prop. |
@@ -314,7 +314,7 @@ it('keeps the selected date when switching BS to AD', async () => {
 ```bash
 # One line per day: epochDay,AD,BS,status
 go run ./services/calendar-api/cmd/bscal dump --table fixtures/year-table.seed.json > go.csv
-pnpm --filter @org/bs-core exec tsx scripts/dump.ts --table ../../fixtures/year-table.seed.json > ts.csv
+node offline-client/dump.mjs > ts.csv   # only if you build an offline client
 diff -u go.csv ts.csv   # any output fails the build
 ```
 
@@ -324,11 +324,9 @@ A nightly variant downloads the **production** table and runs the same diff, plu
 
 | Package | Line + branch coverage |
 |---------|------------------------|
-| `internal/bscal`, `bs-core` | 100% (plus mutation score ≥ 90%) |
+| `internal/bscal` | 100% (plus mutation score ≥ 90%) |
 | `calendardata`, `events`, `uiconfig` | ≥ 90% |
 | `httpapi`, `auth` | ≥ 85% |
-| `calendar-headless` | ≥ 90% |
-| `calendar-web`, `calendar-native` | ≥ 75% + visual regression |
 | Admin panel | Critical flows covered by E2E |
 
 ### 5.7 When tests run

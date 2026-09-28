@@ -22,6 +22,10 @@ type Actor struct {
 	RequestID string
 }
 
+// CanSelfApprove reports whether the actor may approve their own change. Super admins may (for
+// single-admin installations); the approval is still recorded in the audit log.
+func (a Actor) CanSelfApprove() bool { return a.Role == "super_admin" }
+
 // Write inserts an audit row using q (normally the same transaction as the change).
 func Write(ctx context.Context, q store.Querier, a Actor, action, entity, entityID string, before, after any) error {
 	b, err := toJSON(before)

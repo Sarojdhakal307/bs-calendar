@@ -60,7 +60,14 @@ func (s *Server) base(next http.Handler) http.Handler {
 		} else {
 			ri.id = newRequestID()
 		}
-		r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, ri))
+		ctx := context.WithValue(r.Context(), ctxKey{}, ri)
+		if s.cfg.RequestTimeout > 0 {
+			// Cancels database work for requests that take too long (clients have given up by then).
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, s.cfg.RequestTimeout)
+			defer cancel()
+		}
+		r = r.WithContext(ctx)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		h := w.Header()
 		h.Set("X-Request-Id", ri.id)
@@ -68,6 +75,9 @@ func (s *Server) base(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		if s.cfg.IsProduction() {
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
 		defer func() {
 			if p := recover(); p != nil {
 				s.log.Error("panic", "panic", fmt.Sprint(p), "stack", string(debug.Stack()), "requestId", ri.id)

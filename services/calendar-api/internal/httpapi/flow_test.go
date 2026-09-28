@@ -141,7 +141,7 @@ func setup(t *testing.T) *harness {
 	if err := store.Migrate(ctx, dbURL, "up", log); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	pool, err := store.Open(ctx, dbURL, log)
+	pool, err := store.Open(ctx, store.Options{URL: dbURL}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,9 +298,17 @@ func TestAPIFlow(t *testing.T) {
 		if !bytes.Equal(r.body, api.OpenAPI) {
 			t.Fatal("served spec differs from api/openapi.yaml")
 		}
-		for _, p := range []string{"/docs", "/docs/try"} {
+		for _, p := range []string{"/docs/reference", "/docs/try"} {
 			res, err := http.Get(h.ts.URL + p)
 			if err != nil || res.StatusCode != 200 || !strings.Contains(res.Header.Get("Content-Security-Policy"), "cdn.jsdelivr.net") {
+				t.Fatalf("%s: %v %v", p, err, res)
+			}
+			res.Body.Close()
+		}
+		// The website's own routes work without an API key.
+		for _, p := range []string{"/site/v1/info", "/site/v1/convert?bs=2083-06-08", "/site/v1/months/BS/2083/6?include=events"} {
+			res, err := http.Get(h.ts.URL + p)
+			if err != nil || res.StatusCode != 200 {
 				t.Fatalf("%s: %v %v", p, err, res)
 			}
 			res.Body.Close()
@@ -690,7 +698,13 @@ func TestAPIFlow(t *testing.T) {
 		expect(t, h.do(t, req{method: "GET", path: "/v1/admin/years/drafts/" + draft, headers: bearer(viewer)}), 200)
 		r = h.do(t, req{method: "GET", path: "/v1/admin/years/drafts?state=pending", headers: bearer(viewer)})
 		expect(t, r, 200)
-		expectProblem(t, h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + draft + "/approve", headers: bearer(admin)}), 403, "FOUR_EYES_REQUIRED")
+		// Four-eyes: a calendar admin cannot approve their own draft (a super admin can).
+		r = h.do(t, req{method: "POST", path: "/v1/admin/years/drafts", headers: bearer(approver), body: map[string]any{
+			"changes": []any{map[string]any{"bsYear": 2084, "days": y2084, "status": "verified", "source": "Own draft (test)"}}}})
+		expect(t, r, 201)
+		ownDraft := get(r.obj(t), "id").(string)
+		expectProblem(t, h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + ownDraft + "/approve", headers: bearer(approver)}), 403, "FOUR_EYES_REQUIRED")
+		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + ownDraft + "/reject", headers: bearer(approver), body: map[string]string{"reason": "test only"}}), 200)
 		expectProblem(t, h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + draft + "/approve", headers: bearer(designer1)}), 403, "FORBIDDEN")
 		r = h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + draft + "/approve", headers: bearer(approver)})
 		expect(t, r, 200)
@@ -705,6 +719,15 @@ func TestAPIFlow(t *testing.T) {
 		expect(t, h.do(t, req{method: "GET", path: "/v1/calendar/data/1", headers: key(pubKey)}), 200) // old versions stay immutable
 		if h.a.Data.Table().Version() != 2 {
 			t.Fatal("in-memory table not reloaded")
+		}
+		// A super admin may approve their own draft (single-admin installations).
+		r = h.do(t, req{method: "POST", path: "/v1/admin/years/drafts", headers: bearer(admin), body: map[string]any{
+			"changes": []any{map[string]any{"bsYear": 2084, "days": y2084, "status": "verified", "source": "Super admin own draft (test)"}}}})
+		expect(t, r, 201)
+		r = h.do(t, req{method: "POST", path: "/v1/admin/years/drafts/" + get(r.obj(t), "id").(string) + "/approve", headers: bearer(admin)})
+		expect(t, r, 200)
+		if get(r.obj(t), "state") != "approved" {
+			t.Fatalf("super admin self-approval: %s", r.body)
 		}
 	})
 
@@ -748,6 +771,11 @@ func TestAPIFlow(t *testing.T) {
 		}
 		r = h.do(t, req{method: "GET", path: "/v1/ui-config/mobile/1", headers: key(pubKey)})
 		expect(t, r, 200)
+
+		// A super admin may approve their own version (separate app, so mobile's versions are unaffected).
+		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/ui-configs/kiosk", headers: bearer(admin), body: map[string]any{"config": cfg}}), 201)
+		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/ui-configs/kiosk/1/submit", headers: bearer(admin)}), 200)
+		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/ui-configs/kiosk/1/approve", headers: bearer(admin)}), 200)
 
 		// v2: rejected in review.
 		expect(t, h.do(t, req{method: "POST", path: "/v1/admin/ui-configs/mobile", headers: bearer(designer1), body: map[string]any{"config": cfg}}), 201)

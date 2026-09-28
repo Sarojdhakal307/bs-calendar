@@ -1,0 +1,898 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BS Calendar API · Docs</title>
+  <meta name="description" content="Developer guide for the BS Calendar API: authentication, endpoints, caching, errors, and integration guides for React, Next.js and React Native.">
+  <link rel="stylesheet" href="/site.css">
+  <link rel="stylesheet" href="/docs.css">
+  <script src="/docs.js" defer></script>
+  <script src="/site.js" defer></script>
+</head>
+<body class="docs-page">
+  <header class="top">
+    <div class="wrap nav wide">
+      <a class="logo" href="/"><span class="logo-mark">बि</span> BS Calendar API <span class="logo-tag">Docs</span></a>
+      <button class="menu-btn" type="button" aria-label="Menu" aria-expanded="false" aria-controls="site-nav"><span></span></button>
+      <nav id="site-nav">
+        <a href="/#converter">Converter</a>
+        <a href="/#calendar">Calendar</a>
+        <a href="/docs" class="current">Guide</a>
+        <a href="/docs/reference">API reference</a>
+        <a href="/docs/try">Try it</a>
+        <a class="btn small" href="/admin/">Admin</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="docs wrap wide">
+    <aside class="side" id="side">
+      <button class="side-toggle" type="button" aria-expanded="false" aria-controls="side-links">
+        <span>On this page</span><b id="side-current">Introduction</b>
+      </button>
+      <nav class="side-links" id="side-links" aria-label="Documentation">
+        <p class="side-h">Getting started</p>
+        <a href="#intro">Introduction</a>
+        <a href="#quickstart">Quick start</a>
+        <a href="#auth">API keys</a>
+        <a href="#base">Base URL and versions</a>
+        <p class="side-h">Using the API</p>
+        <a href="#endpoints">Endpoints</a>
+        <a href="#dates">Dates and conversion</a>
+        <a href="#months">Month grids</a>
+        <a href="#events">Holidays and events</a>
+        <a href="#theme">Theme and UI config</a>
+        <a href="#sync">Caching and sync</a>
+        <a href="#errors">Errors</a>
+        <a href="#limits">Rate limits</a>
+        <p class="side-h">Integrations</p>
+        <a href="#client">Shared API client</a>
+        <a href="#react">React</a>
+        <a href="#nextjs">Next.js</a>
+        <a href="#react-native">React Native</a>
+        <a href="#ics">Calendar apps (ICS)</a>
+        <p class="side-h">Reference</p>
+        <a href="/docs/reference">API reference ↗</a>
+        <a href="/docs/try">Try it in the browser ↗</a>
+        <a href="/openapi.yaml">openapi.yaml ↗</a>
+      </nav>
+    </aside>
+
+    <main class="content" id="content">
+      <!-- Introduction -->
+      <section id="intro" class="doc-hero">
+        <p class="eyebrow">Developer guide</p>
+        <h1>Build with the Nepali calendar</h1>
+        <p class="lead">
+          The BS Calendar API gives your website and app Bikram Sambat ⇄ AD conversion, ready-to-render month grids,
+          holidays and events, and a date-picker theme that admins control from one dashboard.
+        </p>
+        <div class="choose">
+          <a class="choose-card" href="#react"><span class="ico react">⚛</span><strong>React</strong><span>Vite or any React app</span></a>
+          <a class="choose-card" href="#nextjs"><span class="ico next">N</span><strong>Next.js</strong><span>App Router, server keys</span></a>
+          <a class="choose-card" href="#react-native"><span class="ico rn">📱</span><strong>React Native</strong><span>Expo or bare, offline cache</span></a>
+          <a class="choose-card" href="#ics"><span class="ico ics">📅</span><strong>Calendar apps</strong><span>Google, Outlook, Apple</span></a>
+        </div>
+      </section>
+
+      <!-- Quick start -->
+      <section id="quickstart">
+        <h2>Quick start</h2>
+        <ol class="steps-list">
+          <li><strong>Get an API key.</strong> An admin creates one in the <a href="/admin/">dashboard</a> under API keys. For local development use <code>pk_dev_local_public_key_0001</code>.</li>
+          <li><strong>Send it in the <code>X-Api-Key</code> header.</strong> Every endpoint is under <code><span data-origin></span>/api</code>.</li>
+          <li><strong>Render what comes back.</strong> Month grids already contain both dates for every cell, so your app never converts dates itself.</li>
+        </ol>
+        <div class="tabset">
+          <div class="tabs" role="tablist">
+            <button class="on" data-tab="curl" role="tab" aria-selected="true">curl</button>
+            <button data-tab="js" role="tab" aria-selected="false">JavaScript</button>
+            <button data-tab="res" role="tab" aria-selected="false">Response</button>
+          </div>
+          <div data-pane="curl"><script type="text/plain" data-lang="bash">
+# Today in both calendars
+curl -H "X-Api-Key: pk_your_key" {ORIGIN}/api/v1/today
+
+# Convert an AD date to BS (or use ?bs=2083-06-08)
+curl -H "X-Api-Key: pk_your_key" "{ORIGIN}/api/v1/convert?ad=2026-10-02"
+
+# A ready-to-render BS month with its events
+curl -H "X-Api-Key: pk_your_key" "{ORIGIN}/api/v1/months/BS/2083/6?include=events"
+</script></div>
+          <div data-pane="js" class="hidden"><script type="text/plain" data-lang="js">
+const API = "{ORIGIN}/api";
+const headers = { "X-Api-Key": "pk_your_key" };
+
+const today = await fetch(`${API}/v1/today`, { headers }).then((r) => r.json());
+console.log(today.bs.date, today.bs.monthName.ne); // "2083-06-09" "असोज"
+
+const conv = await fetch(`${API}/v1/convert?bs=2083-06-08`, { headers }).then((r) => r.json());
+console.log(conv.ad.date, conv.weekday.name.en);   // "2026-09-24" "Thursday"
+</script></div>
+          <div data-pane="res" class="hidden"><script type="text/plain" data-lang="json">
+{
+  "ad": { "date": "2026-09-24", "year": 2026, "month": 9, "day": 24,
+          "monthName": { "en": "September", "ne": "सेप्टेम्बर" } },
+  "bs": { "date": "2083-06-08", "dateNe": "२०८३-०६-०८", "year": 2083, "month": 6, "day": 8,
+          "monthName": { "en": "Ashwin", "ne": "असोज" }, "daysInMonth": 31, "yearStatus": "verified" },
+  "weekday": { "index": 4, "name": { "en": "Thursday", "ne": "बिहीबार" } },
+  "epochDay": 20720,
+  "dataVersion": 12
+}
+</script></div>
+        </div>
+      </section>
+
+      <!-- Auth -->
+      <section id="auth">
+        <h2>API keys</h2>
+        <p>There are two kinds of key. Both go in the <code>X-Api-Key</code> header.</p>
+        <div class="grid-2">
+          <div class="note-card">
+            <h4><span class="pill blue">pk_</span> Public key</h4>
+            <p>For code that runs on the user's device: browsers and mobile apps. Anyone can read it, so it is read-only, rate-limited per user IP, and for websites it can be locked to your site's address with <code>allowedOrigins</code>.</p>
+          </div>
+          <div class="note-card">
+            <h4><span class="pill red">sk_</span> Server key</h4>
+            <p>For your own backend only (for example a Next.js server component or route handler). Never ship it to a browser or app bundle. Its rate limit applies to the key as a whole.</p>
+          </div>
+        </div>
+        <div class="callout">
+          <strong>Websites:</strong> the API only accepts browser requests from origins listed in <code>CORS_ALLOWED_ORIGINS</code>. Ask an admin to add your site's address, and to issue a public key with the same <code>allowedOrigins</code>.
+        </div>
+      </section>
+
+      <!-- Base -->
+      <section id="base">
+        <h2>Base URL and versions</h2>
+        <p>The API is served on the same address as this site. Both forms work:</p>
+        <div class="table"><table>
+          <thead><tr><th>Form</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td>With the <code>/api</code> prefix</td><td><code><span data-origin></span>/api/v1/today</code></td></tr>
+            <tr><td>Direct</td><td><code><span data-origin></span>/v1/today</code></td></tr>
+          </tbody>
+        </table></div>
+        <p>All paths start with <code>/v1</code>. New fields may be added to responses at any time, so ignore fields you don't know. Breaking changes would go to <code>/v2</code>.</p>
+      </section>
+
+      <!-- Endpoints -->
+      <section id="endpoints">
+        <h2>Endpoints</h2>
+        <p>The public read API. Full parameters and schemas are in the <a href="/docs/reference">API reference</a>.</p>
+        <div class="table"><table>
+          <thead><tr><th>Endpoint</th><th>Returns</th></tr></thead>
+          <tbody>
+            <tr><td><code>GET /v1/today</code></td><td>Today in BS and AD. Optional <code>?tz=Asia/Kathmandu</code>.</td></tr>
+            <tr><td><code>GET /v1/convert?ad=… | ?bs=…</code></td><td>One date in both calendars, with weekday and month names.</td></tr>
+            <tr><td><code>GET /v1/months/{BS|AD}/{year}/{month}</code></td><td>A 42-cell month grid. Add <code>include=events</code>, <code>weekStart</code>, <code>weekendDays</code>.</td></tr>
+            <tr><td><code>GET /v1/events?from=…&amp;to=…</code></td><td>Published events in a range. Filters: <code>basis</code>, <code>category</code>, <code>q</code>.</td></tr>
+            <tr><td><code>GET /v1/categories</code></td><td>Event categories, their colours and holiday flags.</td></tr>
+            <tr><td><code>GET /v1/manifest?app=web</code></td><td>Current versions of everything an app caches, and links to them.</td></tr>
+            <tr><td><code>GET /v1/calendar/data/{version}</code></td><td>The full BS year table (immutable), for offline conversion.</td></tr>
+            <tr><td><code>GET /v1/ui-config/{app}/{version}</code></td><td>The admin-designed theme and defaults (immutable).</td></tr>
+            <tr><td><code>GET /v1/events/buckets/{bsYear}/{version}</code></td><td>All events of one BS year (immutable), for offline apps.</td></tr>
+            <tr><td><code>GET /v1/events.ics</code></td><td>A calendar subscription feed.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- Dates -->
+      <section id="dates">
+        <h2>Dates and conversion</h2>
+        <p>Dates are always <code>YYYY-MM-DD</code> strings, in either calendar. BS months are numbered 1 (Baisakh) to 12 (Chaitra). Weekdays are 0 (Sunday) to 6 (Saturday).</p>
+        <ul class="ticks">
+          <li>The supported range comes from the official year table (<span data-range>see the manifest's <code>supportedRange</code></span>). Dates outside it return <code>422</code>.</li>
+          <li>Each BS year is <code>verified</code> or <code>projected</code>. Projected years are estimates that can change when the official calendar is published, so show a hint if it matters to your users.</li>
+          <li><code>bs.dateNe</code> gives the date in Devanagari digits, and every name comes in English (<code>en</code>) and Nepali (<code>ne</code>).</li>
+        </ul>
+        <p class="muted small">Try it without code: the <a href="/#converter">converter on the home page</a> uses this same data.</p>
+      </section>
+
+      <!-- Months -->
+      <section id="months">
+        <h2>Month grids</h2>
+        <p><code>GET /v1/months/BS/2083/6?include=events</code> returns everything a calendar view needs: always 42 cells (6 weeks), each with both dates and its flags, plus the events of the visible days.</p>
+        <script type="text/plain" data-lang="json" data-title="Response (shortened)">
+{
+  "basis": "BS", "year": 2083, "month": 6,
+  "monthName": { "en": "Ashwin", "ne": "असोज" },
+  "daysInMonth": 31, "weekStart": 0, "yearStatus": "verified",
+  "cells": [
+    { "ad": "2026-09-17", "bs": "2083-06-01", "day": 1, "weekday": 4, "inMonth": true,
+      "isToday": false, "isWeekend": false, "isHoliday": false, "eventIds": [] }
+  ],
+  "events": [
+    { "id": "evt_…", "title": { "en": "Ghatasthapana", "ne": "घटस्थापना" }, "isHoliday": true,
+      "start": { "ad": "2026-10-11", "bs": "2083-06-25" }, "end": { "ad": "2026-10-11", "bs": "2083-06-25" },
+      "color": { "light": "#B91C1C", "dark": "#F87171" } }
+  ]
+}
+</script>
+        <p>Cells outside the month have <code>inMonth: false</code>; render them dimmed or blank. <code>isWeekend</code> follows <code>weekendDays</code> (default Saturday).</p>
+      </section>
+
+      <!-- Events -->
+      <section id="events">
+        <h2>Holidays and events</h2>
+        <p>Admins add festivals, public holidays and events on BS or AD dates, including yearly repeats. Apps only see published events.</p>
+        <script type="text/plain" data-lang="bash">
+# All published events in a BS month, holidays only
+curl -H "X-Api-Key: pk_your_key" \
+  "{ORIGIN}/api/v1/events?basis=BS&from=2083-06-01&to=2083-06-30&category=public_holiday"
+</script>
+        <p>Every event has a light and dark colour from its category. Use the colour for the current colour scheme.</p>
+      </section>
+
+      <!-- Theme -->
+      <section id="theme">
+        <h2>Theme and UI config</h2>
+        <p>Admins design the date picker in the dashboard: colours for light and dark mode, the default calendar (BS or AD), language, digits and week start. Your app reads it and applies it, so a change needs no release.</p>
+        <script type="text/plain" data-lang="js">
+const manifest = await get("/v1/manifest?app=web");   // or app=mobile
+const config = await get(manifest.links.config);       // e.g. /v1/ui-config/web/7 (immutable)
+
+config.defaults;     // { mode: "BS", locale: "en", digits: "latin", weekStart: 0, colorScheme: "system" }
+config.theme.light;  // { bg, surface, text, muted, border, primary, onPrimary, today, holiday, weekend, disabled }
+config.shape.radius; // 12
+</script>
+      </section>
+
+      <!-- Sync -->
+      <section id="sync">
+        <h2>Caching and sync</h2>
+        <p>Almost everything is immutable and versioned. Only the manifest changes often, so apps check it and download only what changed.</p>
+        <ol class="flow">
+          <li><b>Check</b><span><code>GET /v1/manifest</code> (send <code>If-None-Match</code> to get <code>304</code>).</span></li>
+          <li><b>Compare</b><span>Each version with the one in your cache.</span></li>
+          <li><b>Fetch</b><span>Only the changed links. They are cached for a year.</span></li>
+          <li><b>Render</b><span>From the cache, so the calendar works offline.</span></li>
+        </ol>
+        <p>Month grids and conversions can be cached for 5 minutes and one hour respectively. The <a href="#client">shared client</a> below caches months in memory; the <a href="#react-native">React Native guide</a> adds a device cache.</p>
+      </section>
+
+      <!-- Errors -->
+      <section id="errors">
+        <h2>Errors</h2>
+        <p>Errors use <a href="https://www.rfc-editor.org/rfc/rfc9457">RFC 9457</a> problem documents (<code>application/problem+json</code>). Switch on <code>code</code>, show <code>detail</code>, and log <code>requestId</code>.</p>
+        <div class="grid-2">
+          <script type="text/plain" data-lang="json" data-title="422 Unprocessable">
+{
+  "type": "urn:bs-calendar:problem:VALIDATION_FAILED",
+  "title": "Validation failed",
+  "status": 422,
+  "code": "VALIDATION_FAILED",
+  "errors": [{ "field": "ad", "message": "send exactly one of ad or bs (YYYY-MM-DD)" }],
+  "requestId": "req_b0841c1d347350a2"
+}
+</script>
+          <div class="table"><table>
+            <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>401</code></td><td>Missing or unknown API key</td></tr>
+              <tr><td><code>403</code></td><td>Key not allowed from this origin</td></tr>
+              <tr><td><code>404</code></td><td>Unknown resource or version</td></tr>
+              <tr><td><code>422</code></td><td>Bad input or date out of range</td></tr>
+              <tr><td><code>429</code></td><td>Rate limited; wait <code>Retry-After</code> seconds</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- Limits -->
+      <section id="limits">
+        <h2>Rate limits</h2>
+        <p>Each key has a per-minute limit set by the admin. Every response carries <code>RateLimit-Limit</code> and <code>RateLimit-Remaining</code>. On <code>429</code>, wait for <code>Retry-After</code> seconds before trying again. Caching as described above keeps you far below the limit.</p>
+      </section>
+
+      <!-- Client -->
+      <section id="client" class="integration">
+        <p class="eyebrow">Integrations</p>
+        <h2>Shared API client</h2>
+        <p>One small TypeScript file with no dependencies. It works in React, Next.js and React Native, so every guide below uses it. Save it as <code>lib/calendar-api.ts</code>.</p>
+        <script type="text/plain" data-lang="ts" data-title="lib/calendar-api.ts">
+export type Basis = "AD" | "BS";
+export type Localized = { en: string; ne: string };
+
+export interface CalendarEvent {
+  id: string;
+  title: { en: string; ne?: string };
+  category: string;
+  isHoliday: boolean;
+  start: { ad: string; bs: string | null };
+  end: { ad: string; bs: string | null };
+  color: { light: string; dark: string };
+}
+
+export interface DayCell {
+  ad: string; bs: string | null; day: number; weekday: number;
+  inMonth: boolean; isToday: boolean; isWeekend: boolean; isHoliday: boolean; eventIds: string[];
+}
+
+export interface MonthGrid {
+  basis: Basis; year: number; month: number; monthName: Localized;
+  daysInMonth: number; yearStatus?: "verified" | "projected";
+  cells: DayCell[];          // always 42
+  events: CalendarEvent[];
+}
+
+export interface Conversion {
+  ad: { date: string; year: number; month: number; day: number; monthName: Localized };
+  bs: { date: string; dateNe: string; year: number; month: number; day: number; monthName: Localized };
+  weekday: { index: number; name: Localized };
+}
+
+export class CalendarApiError extends Error {
+  constructor(public status: number, public code: string, message: string) { super(message); }
+}
+
+export function createCalendarApi(baseUrl: string, apiKey?: string) {
+  const cache = new Map<string, { at: number; value: Promise<unknown> }>();
+  const TTL = 5 * 60_000;
+
+  function get<T>(path: string, cacheable = false): Promise<T> {
+    const hit = cache.get(path);
+    if (cacheable && hit && Date.now() - hit.at < TTL) return hit.value as Promise<T>;
+    const headers: Record<string, string> = apiKey ? { "X-Api-Key": apiKey } : {};
+    const value = fetch(baseUrl + path, { headers }).then(async (res) => {
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new CalendarApiError(res.status, body.code ?? `HTTP_${res.status}`, body.detail ?? res.statusText);
+      return body as T;
+    });
+    if (cacheable) {
+      cache.set(path, { at: Date.now(), value });
+      value.catch(() => cache.delete(path));
+    }
+    return value;
+  }
+
+  return {
+    today: () => get<Conversion>("/v1/today"),
+    convert: (q: { ad: string } | { bs: string }) => get<Conversion>(`/v1/convert?${new URLSearchParams(q)}`, true),
+    month: (basis: Basis, year: number, month: number) =>
+      get<MonthGrid>(`/v1/months/${basis}/${year}/${month}?include=events`, true),
+  };
+}
+export type CalendarApi = ReturnType<typeof createCalendarApi>;
+
+/** Moves a year/month by `delta` months. */
+export function addMonths(year: number, month: number, delta: number) {
+  const i = year * 12 + (month - 1) + delta;
+  return { year: Math.floor(i / 12), month: (i % 12) + 1 };
+}
+
+/** 2083 → "२०८३" */
+export const toNepaliDigits = (s: string | number) =>
+  String(s).replace(/[0-9]/g, (d) => String.fromCharCode(0x0966 + Number(d)));
+
+export const WEEKDAYS = {
+  en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+  ne: ["आइत", "सोम", "मंगल", "बुध", "बिही", "शुक्र", "शनि"],
+};
+</script>
+        <p>And one hook, shared by React and React Native, in <code>lib/use-month.ts</code>:</p>
+        <script type="text/plain" data-lang="ts" data-title="lib/use-month.ts">
+import { useEffect, useState } from "react";
+import type { Basis, CalendarApi, MonthGrid } from "./calendar-api";
+
+export function useMonth(api: CalendarApi, basis: Basis, year: number | null, month: number | null) {
+  const [state, setState] = useState<{ grid: MonthGrid | null; loading: boolean; error: string | null }>({
+    grid: null, loading: true, error: null,
+  });
+  useEffect(() => {
+    if (year === null || month === null) return;
+    let alive = true;
+    setState((s) => ({ ...s, loading: true, error: null }));
+    api.month(basis, year, month)
+      .then((grid) => alive && setState({ grid, loading: false, error: null }))
+      .catch((e) => alive && setState((s) => ({ ...s, loading: false, error: e.message })));
+    return () => { alive = false; };
+  }, [api, basis, year, month]);
+  return state;
+}
+</script>
+      </section>
+
+      <!-- React -->
+      <section id="react" class="integration">
+        <div class="int-head"><span class="ico react">⚛</span><div><h2>React</h2><p class="muted">Vite, Create React App, or any client-side React app.</p></div></div>
+
+        <h3>1. Configure</h3>
+        <p>Use a <strong>public</strong> key locked to your site's origin, and add the origin to the API's <code>CORS_ALLOWED_ORIGINS</code>.</p>
+        <script type="text/plain" data-lang="bash" data-title=".env">
+VITE_CAL_API={ORIGIN}/api
+VITE_CAL_KEY=pk_your_public_key
+</script>
+        <script type="text/plain" data-lang="ts" data-title="src/lib/api.ts">
+import { createCalendarApi } from "./calendar-api";
+
+export const calendarApi = createCalendarApi(import.meta.env.VITE_CAL_API, import.meta.env.VITE_CAL_KEY);
+</script>
+
+        <h3>2. A month calendar</h3>
+        <p>BS/AD switch, previous and next month, holidays and event dots. Every cell already has both dates.</p>
+        <script type="text/plain" data-lang="tsx" data-title="src/components/MonthCalendar.tsx">
+import { useEffect, useState } from "react";
+import { addMonths, type Basis, type DayCell, WEEKDAYS } from "../lib/calendar-api";
+import { calendarApi } from "../lib/api";
+import { useMonth } from "../lib/use-month";
+import "./MonthCalendar.css";
+
+export function MonthCalendar({ onSelect }: { onSelect?: (cell: DayCell) => void }) {
+  const [basis, setBasis] = useState<Basis>("BS");
+  const [ym, setYm] = useState<{ year: number; month: number } | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const { grid, loading, error } = useMonth(calendarApi, basis, ym?.year ?? null, ym?.month ?? null);
+
+  // Start on the current month.
+  useEffect(() => {
+    calendarApi.today().then((t) => setYm(basis === "BS" ? t.bs : t.ad));
+  }, [basis]);
+
+  const eventsById = new Map(grid?.events.map((e) => [e.id, e]));
+
+  return (
+    <div className="cal">
+      <header className="cal-head">
+        <button onClick={() => ym && setYm(addMonths(ym.year, ym.month, -1))} aria-label="Previous month">‹</button>
+        <h2>{grid ? `${grid.monthName.en} ${grid.year}` : "…"}</h2>
+        <button onClick={() => ym && setYm(addMonths(ym.year, ym.month, 1))} aria-label="Next month">›</button>
+        <div className="cal-seg">
+          {(["BS", "AD"] as const).map((b) => (
+            <button key={b} aria-pressed={basis === b} onClick={() => setBasis(b)}>{b}</button>
+          ))}
+        </div>
+      </header>
+
+      {error && <p className="cal-error">{error}</p>}
+
+      <div className="cal-grid" aria-busy={loading}>
+        {WEEKDAYS.en.map((d) => <div key={d} className="cal-dow">{d}</div>)}
+        {grid?.cells.map((c) => {
+          const alt = basis === "BS" ? c.ad.slice(8) : c.bs?.slice(8);
+          const cls = ["cal-cell", !c.inMonth && "out", c.isWeekend && "weekend", c.isHoliday && "holiday",
+            c.isToday && "today", selected === c.ad && "selected"].filter(Boolean).join(" ");
+          return (
+            <button key={c.ad} className={cls} onClick={() => { setSelected(c.ad); onSelect?.(c); }}>
+              <span className="n">{c.day}</span>
+              <small>{alt ? Number(alt) : ""}</small>
+              <span className="dots">
+                {c.eventIds.slice(0, 3).map((id) => (
+                  <i key={id} style={{ background: eventsById.get(id)?.color.light }} />
+                ))}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+</script>
+        <script type="text/plain" data-lang="css" data-title="src/components/MonthCalendar.css">
+.cal { max-width: 560px; border: 1px solid #e3e7ee; border-radius: 16px; padding: 12px; }
+.cal-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.cal-head h2 { flex: 1; margin: 0; font-size: 18px; }
+.cal-seg button[aria-pressed="true"] { background: #c2261d; color: #fff; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.cal-dow { text-align: center; font-size: 12px; color: #566070; }
+.cal-cell { aspect-ratio: 1; border: 1px solid #e3e7ee; border-radius: 10px; background: #fff; display: grid; place-items: center; }
+.cal-cell .n { font-weight: 700; }
+.cal-cell small { font-size: 10px; color: #566070; }
+.cal-cell .dots { display: flex; gap: 2px; }
+.cal-cell .dots i { width: 5px; height: 5px; border-radius: 50%; }
+.cal-cell.out { opacity: .35; }
+.cal-cell.weekend .n, .cal-cell.holiday .n { color: #c2261d; }
+.cal-cell.today { border: 2px solid #1d4ed8; }
+.cal-cell.selected { background: #1d4ed8; color: #fff; }
+</script>
+
+        <h3>3. A BS ⇄ AD converter</h3>
+        <script type="text/plain" data-lang="tsx" data-title="src/components/DateConverter.tsx">
+import { useState } from "react";
+import type { Conversion } from "../lib/calendar-api";
+import { calendarApi } from "../lib/api";
+
+export function DateConverter() {
+  const [from, setFrom] = useState<"bs" | "ad">("bs");
+  const [value, setValue] = useState("");
+  const [result, setResult] = useState<Conversion | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      setResult(await calendarApi.convert(from === "bs" ? { bs: value } : { ad: value }));
+    } catch (err) {
+      setResult(null);
+      setError((err as Error).message);
+    }
+  }
+
+  return (
+    <form onSubmit={submit}>
+      <select value={from} onChange={(e) => setFrom(e.target.value as "bs" | "ad")}>
+        <option value="bs">BS → AD</option>
+        <option value="ad">AD → BS</option>
+      </select>
+      <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="YYYY-MM-DD" required
+        type={from === "ad" ? "date" : "text"} pattern="\d{4}-\d{2}-\d{2}" />
+      <button type="submit">Convert</button>
+
+      {error && <p role="alert">{error}</p>}
+      {result && (
+        <p>
+          <strong>{result.bs.monthName.ne} {result.bs.dateNe.slice(8)}, {result.bs.dateNe.slice(0, 4)}</strong>
+          {" = "}
+          {result.ad.day} {result.ad.monthName.en} {result.ad.year} ({result.weekday.name.en})
+        </p>
+      )}
+    </form>
+  );
+}
+</script>
+        <script type="text/plain" data-lang="tsx" data-title="src/App.tsx">
+import { MonthCalendar } from "./components/MonthCalendar";
+import { DateConverter } from "./components/DateConverter";
+
+export default function App() {
+  return (
+    <main>
+      <DateConverter />
+      <MonthCalendar onSelect={(c) => console.log("picked", c.ad, c.bs)} />
+    </main>
+  );
+}
+</script>
+      </section>
+
+      <!-- Next.js -->
+      <section id="nextjs" class="integration">
+        <div class="int-head"><span class="ico next">N</span><div><h2>Next.js</h2><p class="muted">App Router (Next.js 15). Keep a server key on the server; the browser never sees it.</p></div></div>
+
+        <h3>1. Configure</h3>
+        <p>Use a <strong>server</strong> key (<code>sk_…</code>). Variables without <code>NEXT_PUBLIC_</code> stay on the server.</p>
+        <script type="text/plain" data-lang="bash" data-title=".env.local">
+CAL_API={ORIGIN}/api
+CAL_KEY=sk_your_server_key
+</script>
+
+        <h3>2. Server components: render today and holidays with caching</h3>
+        <p>Fetch on the server with Next's data cache. Pages stay fast and the key stays secret.</p>
+        <script type="text/plain" data-lang="ts" data-title="lib/calendar-server.ts">
+import "server-only";
+import type { Conversion, MonthGrid } from "./calendar-api";
+
+async function cal<T>(path: string, revalidate: number): Promise<T> {
+  const res = await fetch(`${process.env.CAL_API}${path}`, {
+    headers: { "X-Api-Key": process.env.CAL_KEY! },
+    next: { revalidate },          // seconds; matches the API's own cache headers
+  });
+  if (!res.ok) throw new Error(`Calendar API ${res.status}`);
+  return res.json();
+}
+
+export const getToday = () => cal<Conversion>("/v1/today", 60);
+export const getMonth = (basis: "BS" | "AD", y: number, m: number) =>
+  cal<MonthGrid>(`/v1/months/${basis}/${y}/${m}?include=events`, 300);
+</script>
+        <script type="text/plain" data-lang="tsx" data-title="app/page.tsx">
+import { getMonth, getToday } from "@/lib/calendar-server";
+import { CalendarClient } from "./calendar-client";
+
+export default async function Page() {
+  const today = await getToday();
+  const month = await getMonth("BS", today.bs.year, today.bs.month);
+  const holidays = month.events.filter((e) => e.isHoliday);
+
+  return (
+    <main>
+      <h1>{today.bs.monthName.ne} {today.bs.dateNe.slice(8)}, {today.bs.dateNe.slice(0, 4)}</h1>
+      <p>{today.weekday.name.en}, {today.ad.day} {today.ad.monthName.en} {today.ad.year}</p>
+
+      <h2>Holidays this month</h2>
+      <ul>
+        {holidays.map((h) => <li key={h.id}>{h.start.bs} · {h.title.en}</li>)}
+      </ul>
+
+      {/* Interactive part runs in the browser, starting from server data */}
+      <CalendarClient initial={month} />
+    </main>
+  );
+}
+</script>
+
+        <h3>3. A proxy route for interactive components</h3>
+        <p>Client components can't hold the server key, so they call your own route handler, which adds the key and only forwards read-only calendar paths.</p>
+        <script type="text/plain" data-lang="ts" data-title="app/api/calendar/[...path]/route.ts">
+import { NextRequest } from "next/server";
+
+const ALLOWED = /^v1\/(today|convert|months\/(BS|AD)\/\d{4}\/\d{1,2}|events|categories)$/;
+
+export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const path = (await params).path.join("/");
+  if (!ALLOWED.test(path)) return new Response("Not found", { status: 404 });
+
+  const res = await fetch(`${process.env.CAL_API}/${path}${req.nextUrl.search}`, {
+    headers: { "X-Api-Key": process.env.CAL_KEY! },
+    next: { revalidate: 300 },
+  });
+  return new Response(res.body, {
+    status: res.status,
+    headers: {
+      "Content-Type": res.headers.get("Content-Type") ?? "application/json",
+      "Cache-Control": "public, max-age=300",
+    },
+  });
+}
+</script>
+        <script type="text/plain" data-lang="tsx" data-title="app/calendar-client.tsx">
+"use client";
+import { useMemo, useState } from "react";
+import { addMonths, createCalendarApi, type MonthGrid } from "@/lib/calendar-api";
+import { useMonth } from "@/lib/use-month";
+
+export function CalendarClient({ initial }: { initial: MonthGrid }) {
+  // Same-origin proxy: no key in the browser.
+  const api = useMemo(() => createCalendarApi("/api/calendar"), []);
+  const [ym, setYm] = useState({ year: initial.year, month: initial.month });
+  const { grid } = useMonth(api, "BS", ym.year, ym.month);
+  const shown = grid ?? initial;
+
+  return (
+    <section>
+      <button onClick={() => setYm(addMonths(ym.year, ym.month, -1))}>‹</button>
+      <strong> {shown.monthName.en} {shown.year} </strong>
+      <button onClick={() => setYm(addMonths(ym.year, ym.month, 1))}>›</button>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        {shown.cells.map((c) => (
+          <div key={c.ad} style={{ opacity: c.inMonth ? 1 : 0.35, color: c.isHoliday || c.isWeekend ? "#c2261d" : undefined }}>
+            {c.day} <small>{Number(c.ad.slice(8))}</small>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+</script>
+        <div class="callout">
+          <strong>Prefer a public key?</strong> You can also use the <a href="#react">React</a> setup in client components with <code>NEXT_PUBLIC_CAL_KEY=pk_…</code>. Then add your site to <code>CORS_ALLOWED_ORIGINS</code> and lock the key to your origin.
+        </div>
+      </section>
+
+      <!-- React Native -->
+      <section id="react-native" class="integration">
+        <div class="int-head"><span class="ico rn">📱</span><div><h2>React Native</h2><p class="muted">Expo or bare React Native. No native modules, works in Expo Go and offline.</p></div></div>
+
+        <h3>1. Setup</h3>
+        <script type="text/plain" data-lang="bash">
+npx create-expo-app@latest my-app && cd my-app
+npx expo install @react-native-async-storage/async-storage
+</script>
+        <script type="text/plain" data-lang="bash" data-title=".env">
+EXPO_PUBLIC_CAL_API=http://192.168.1.20:8080   # see the table below
+EXPO_PUBLIC_CAL_KEY=pk_your_mobile_key
+</script>
+        <div class="table"><table>
+          <thead><tr><th>App runs on</th><th>API address</th></tr></thead>
+          <tbody>
+            <tr><td>Android emulator</td><td><code>http://10.0.2.2:8080</code></td></tr>
+            <tr><td>iOS simulator</td><td><code>http://localhost:8080</code></td></tr>
+            <tr><td>A phone on the same Wi-Fi</td><td><code>http://&lt;your computer's LAN IP&gt;:8080</code></td></tr>
+            <tr><td>Production</td><td><code>https://…</code> (release builds block plain <code>http</code>)</td></tr>
+          </tbody>
+        </table></div>
+        <p>Mobile apps send no <code>Origin</code> header, so CORS doesn't apply. Ask for a public key <em>without</em> <code>allowedOrigins</code>.</p>
+
+        <h3>2. The client, with an offline cache</h3>
+        <p>Copy <a href="#client"><code>calendar-api.ts</code> and <code>use-month.ts</code></a> into <code>lib/</code>. Then wrap months so the last good copy is kept on the device:</p>
+        <script type="text/plain" data-lang="ts" data-title="lib/api.ts">
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createCalendarApi, type Basis, type MonthGrid } from "./calendar-api";
+
+const base = createCalendarApi(process.env.EXPO_PUBLIC_CAL_API!, process.env.EXPO_PUBLIC_CAL_KEY!);
+
+// Network first, device cache as a fallback: the calendar still opens in airplane mode.
+async function month(basis: Basis, year: number, m: number): Promise<MonthGrid> {
+  const key = `cal:month:${basis}:${year}:${m}`;
+  try {
+    const grid = await base.month(basis, year, m);
+    AsyncStorage.setItem(key, JSON.stringify(grid)).catch(() => {});
+    return grid;
+  } catch (err) {
+    const saved = await AsyncStorage.getItem(key);
+    if (saved) return JSON.parse(saved);
+    throw err;
+  }
+}
+
+export const calendarApi = { ...base, month };
+</script>
+
+        <h3>3. A month calendar screen</h3>
+        <script type="text/plain" data-lang="tsx" data-title="components/MonthCalendar.tsx">
+import { useEffect, useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, Text, useColorScheme, View } from "react-native";
+import { addMonths, type Basis, type DayCell, toNepaliDigits, WEEKDAYS } from "../lib/calendar-api";
+import { calendarApi } from "../lib/api";
+import { useMonth } from "../lib/use-month";
+
+export function MonthCalendar({ onSelect }: { onSelect?: (c: DayCell) => void }) {
+  const dark = useColorScheme() === "dark";
+  const c = dark ? colors.dark : colors.light;
+  const [basis, setBasis] = useState<Basis>("BS");
+  const [ym, setYm] = useState<{ year: number; month: number } | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const { grid, loading, error } = useMonth(calendarApi, basis, ym?.year ?? null, ym?.month ?? null);
+
+  useEffect(() => {
+    calendarApi.today().then((t) => setYm(basis === "BS" ? t.bs : t.ad)).catch(() => {});
+  }, [basis]);
+
+  const byId = new Map(grid?.events.map((e) => [e.id, e]));
+  const num = (n: number) => (basis === "BS" ? toNepaliDigits(n) : String(n));
+
+  return (
+    <View style={[s.card, { backgroundColor: c.bg, borderColor: c.border }]}>
+      <View style={s.head}>
+        <Pressable onPress={() => ym && setYm(addMonths(ym.year, ym.month, -1))} hitSlop={12}>
+          <Text style={[s.arrow, { color: c.text }]}>‹</Text>
+        </Pressable>
+        <Text style={[s.title, { color: c.text }]}>
+          {grid ? `${grid.monthName[basis === "BS" ? "ne" : "en"]} ${num(grid.year)}` : "…"}
+        </Text>
+        <Pressable onPress={() => ym && setYm(addMonths(ym.year, ym.month, 1))} hitSlop={12}>
+          <Text style={[s.arrow, { color: c.text }]}>›</Text>
+        </Pressable>
+        <View style={[s.seg, { borderColor: c.border }]}>
+          {(["BS", "AD"] as const).map((b) => (
+            <Pressable key={b} onPress={() => setBasis(b)} style={[s.segBtn, basis === b && { backgroundColor: c.primary }]}>
+              <Text style={{ color: basis === b ? "#fff" : c.muted, fontWeight: "600" }}>{b}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
+
+      {error ? <Text style={{ color: c.holiday }}>{error}</Text> : null}
+
+      <View style={s.grid}>
+        {WEEKDAYS[basis === "BS" ? "ne" : "en"].map((d) => (
+          <Text key={d} style={[s.dow, { color: c.muted }]}>{d}</Text>
+        ))}
+        {grid?.cells.map((cell) => {
+          const sel = selected === cell.ad;
+          const red = cell.isHoliday || cell.isWeekend;
+          const alt = basis === "BS" ? Number(cell.ad.slice(8)) : cell.bs ? toNepaliDigits(Number(cell.bs.slice(8))) : "";
+          return (
+            <Pressable key={cell.ad} style={s.cellWrap} onPress={() => { setSelected(cell.ad); onSelect?.(cell); }}
+              accessibilityLabel={`${cell.ad}${cell.bs ? `, BS ${cell.bs}` : ""}`}>
+              <View style={[s.cell, cell.isToday && { borderColor: c.primary, borderWidth: 2 },
+                sel && { backgroundColor: c.primary }, !cell.inMonth && { opacity: 0.35 }]}>
+                <Text style={[s.n, { color: sel ? "#fff" : red ? c.holiday : c.text }]}>{num(cell.day)}</Text>
+                <Text style={[s.alt, { color: sel ? "#fff" : c.muted }]}>{alt}</Text>
+                <View style={s.dots}>
+                  {cell.eventIds.slice(0, 3).map((id) => (
+                    <View key={id} style={[s.dot, { backgroundColor: byId.get(id)?.color[dark ? "dark" : "light"] }]} />
+                  ))}
+                </View>
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+      {loading && <ActivityIndicator style={s.spinner} color={c.primary} />}
+    </View>
+  );
+}
+
+const colors = {
+  light: { bg: "#fff", text: "#111827", muted: "#566070", border: "#e3e7ee", primary: "#1d4ed8", holiday: "#c2261d" },
+  dark: { bg: "#141a24", text: "#eef1f5", muted: "#9aa4b2", border: "#253043", primary: "#6ea8ff", holiday: "#f26b5b" },
+};
+
+const s = StyleSheet.create({
+  card: { borderWidth: 1, borderRadius: 16, padding: 12 },
+  head: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  arrow: { fontSize: 26, paddingHorizontal: 6 },
+  title: { flex: 1, fontSize: 18, fontWeight: "700" },
+  seg: { flexDirection: "row", borderWidth: 1, borderRadius: 8, overflow: "hidden" },
+  segBtn: { paddingHorizontal: 10, paddingVertical: 4 },
+  grid: { flexDirection: "row", flexWrap: "wrap" },
+  dow: { width: `${100 / 7}%`, textAlign: "center", fontSize: 11, fontWeight: "600", paddingVertical: 4 },
+  cellWrap: { width: `${100 / 7}%`, aspectRatio: 1, padding: 2 },
+  cell: { flex: 1, borderRadius: 10, alignItems: "center", justifyContent: "center", borderColor: "transparent", borderWidth: 1 },
+  n: { fontSize: 16, fontWeight: "700" },
+  alt: { fontSize: 10 },
+  dots: { flexDirection: "row", gap: 2, height: 5, marginTop: 2 },
+  dot: { width: 5, height: 5, borderRadius: 3 },
+  spinner: { position: "absolute", top: 12, right: 12 },
+});
+</script>
+
+        <h3>4. A converter screen</h3>
+        <script type="text/plain" data-lang="tsx" data-title="app/(tabs)/convert.tsx">
+import { useState } from "react";
+import { Pressable, Text, TextInput, View } from "react-native";
+import type { Conversion } from "../../lib/calendar-api";
+import { calendarApi } from "../../lib/api";
+
+export default function ConvertScreen() {
+  const [from, setFrom] = useState<"bs" | "ad">("bs");
+  const [value, setValue] = useState("");
+  const [result, setResult] = useState<Conversion | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setError(null);
+    try {
+      setResult(await calendarApi.convert(from === "bs" ? { bs: value } : { ad: value }));
+    } catch (e) {
+      setResult(null);
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <View style={{ padding: 16, gap: 12 }}>
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        {(["bs", "ad"] as const).map((f) => (
+          <Pressable key={f} onPress={() => setFrom(f)}
+            style={{ padding: 8, borderRadius: 8, backgroundColor: from === f ? "#c2261d" : "#eee" }}>
+            <Text style={{ color: from === f ? "#fff" : "#111" }}>{f === "bs" ? "BS → AD" : "AD → BS"}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <TextInput value={value} onChangeText={setValue} placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation"
+        style={{ borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 12, fontSize: 16 }} />
+      <Pressable onPress={run} style={{ backgroundColor: "#1d4ed8", padding: 14, borderRadius: 10 }}>
+        <Text style={{ color: "#fff", textAlign: "center", fontWeight: "600" }}>Convert</Text>
+      </Pressable>
+      {error && <Text style={{ color: "#c2261d" }}>{error}</Text>}
+      {result && (
+        <View>
+          <Text style={{ fontSize: 22, fontWeight: "700" }}>
+            {result.bs.monthName.ne} {result.bs.dateNe.slice(8)}, {result.bs.dateNe.slice(0, 4)}
+          </Text>
+          <Text>{result.weekday.name.en}, {result.ad.day} {result.ad.monthName.en} {result.ad.year}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+</script>
+        <div class="callout">
+          <strong>Going further:</strong> the repository's <code>docs/react-native.md</code> adds a bottom-sheet date picker that applies the admin theme from <code>/v1/ui-config/mobile/…</code>, and full offline sync through the manifest.
+        </div>
+      </section>
+
+      <!-- ICS -->
+      <section id="ics" class="integration">
+        <div class="int-head"><span class="ico ics">📅</span><div><h2>Calendar apps (ICS)</h2><p class="muted">Show Nepali holidays in Google Calendar, Outlook or Apple Calendar.</p></div></div>
+        <p>Calendar apps can't send headers, so this one endpoint accepts the key as a query parameter. Use a public key.</p>
+        <script type="text/plain" data-lang="bash" data-title="Subscription URL">
+{ORIGIN}/api/v1/events.ics?api_key=pk_your_key&lang=ne
+</script>
+        <ul class="ticks">
+          <li><strong>Google Calendar:</strong> Other calendars → + → From URL.</li>
+          <li><strong>Outlook:</strong> Add calendar → Subscribe from web.</li>
+          <li><strong>Apple Calendar:</strong> File → New Calendar Subscription.</li>
+        </ul>
+        <p>Optional parameters: <code>fromYear</code>, <code>toYear</code> (BS, at most 5 years), <code>category</code>, <code>lang</code>.</p>
+      </section>
+
+      <section class="next-steps">
+        <a class="link-card" href="/docs/reference"><strong>API reference →</strong><span>Every endpoint, parameter and schema</span></a>
+        <a class="link-card" href="/docs/try"><strong>Try it →</strong><span>Send real requests from your browser</span></a>
+        <a class="link-card" href="/#converter"><strong>Converter →</strong><span>Convert a date without code</span></a>
+      </section>
+
+      <footer class="foot doc-foot">
+        <span>BS Calendar API</span>
+        <a href="/openapi.yaml">openapi.yaml</a>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -44,7 +44,8 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./deploy/postgres:/docker-entrypoint-initdb.d:ro
+      # Only the test-database script. deploy/postgres/roles.sql is for production and needs passwords.
+      - ./deploy/postgres/01-test-database.sh:/docker-entrypoint-initdb.d/01-test-database.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 3s

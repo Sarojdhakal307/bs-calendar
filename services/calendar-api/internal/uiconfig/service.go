@@ -364,14 +364,15 @@ func (s *Service) Approve(ctx context.Context, actor audit.Actor, app string, ve
 		if cur.Status != "in_review" {
 			return apperr.InvalidState("Only versions in review can be approved.")
 		}
-		if cur.CreatedBy == actor.UserID {
-			return apperr.Forbidden(apperr.CodeFourEyes, "A different designer must approve this version.")
+		if cur.CreatedBy == actor.UserID && !actor.CanSelfApprove() {
+			return apperr.Forbidden(apperr.CodeFourEyes, "A different designer (or a super admin) must approve this version.")
 		}
 		if rep := s.Validate(cur.Config); !rep.Valid {
 			return apperr.Validation().With("report", rep)
 		}
-		if _, err := tx.Exec(ctx, `UPDATE ui_configs SET status = 'published', approved_by = $4, published_at = now(), updated_at = now()
-			WHERE tenant_id = $1 AND app_key = $2 AND version = $3`, actor.TenantID, app, version, actor.UserID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE ui_configs SET status = 'published', approved_by = $4, published_at = now(), updated_at = now(),
+			self_approved = $5 WHERE tenant_id = $1 AND app_key = $2 AND version = $3`,
+			actor.TenantID, app, version, actor.UserID, cur.CreatedBy == actor.UserID); err != nil {
 			return err
 		}
 		return s.route(ctx, tx, actor.TenantID, app, version, percent)

@@ -6,7 +6,9 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,6 +56,26 @@ type Server struct {
 	loginLim  *limiterSet
 	adminLim  *limiterSet
 	mux       *http.ServeMux
+	draining  atomic.Bool
+}
+
+// SetDraining makes /readyz fail so load balancers stop sending new requests before shutdown.
+func (s *Server) SetDraining() { s.draining.Store(true) }
+
+// adminNetworkAllowed applies ADMIN_ALLOWED_CIDRS to every admin route, including login.
+func (s *Server) adminNetworkAllowed(r *http.Request) error {
+	if len(s.cfg.AdminAllowedCIDRs) == 0 {
+		return nil
+	}
+	if ip, err := netip.ParseAddr(info(r).ip); err == nil {
+		ip = ip.Unmap()
+		for _, p := range s.cfg.AdminAllowedCIDRs {
+			if p.Contains(ip) {
+				return nil
+			}
+		}
+	}
+	return apperr.Forbidden(apperr.CodeForbidden, "The admin API is not reachable from this network.")
 }
 
 // New builds the server and registers routes.
@@ -69,7 +91,7 @@ func New(d Deps) *Server {
 }
 
 // Handler returns the root handler with middleware applied.
-func (s *Server) Handler() http.Handler { return s.base(s.cors(s.mux)) }
+func (s *Server) Handler() http.Handler { return s.base(s.cors(s.front(s.mux))) }
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request) error
 
@@ -111,7 +133,26 @@ func (s *Server) public(h handlerFunc) handlerFunc {
 			return apperr.Forbidden(apperr.CodeOriginNotAllowed, "This API key is not allowed from origin "+origin+".")
 		}
 		ri.client, ri.tenantID = &c, c.TenantID
-		if err := s.limit(w, s.clientLim, c.ID, c.RatePerMin); err != nil {
+		// A public key is shared by every install of an app, so its limit applies per client IP;
+		// a server key belongs to one backend, so its limit applies to the key as a whole.
+		limitKey := c.ID
+		if c.Kind == "public" {
+			limitKey = c.ID + "|" + ri.ip
+		}
+		if err := s.limit(w, s.clientLim, limitKey, c.RatePerMin); err != nil {
+			return err
+		}
+		return h(w, r)
+	}
+}
+
+// site serves the embedded website's own calls. They need no API key (the site cannot hold a
+// secret), so they are limited to a few read-only routes and a per-IP rate.
+func (s *Server) site(h handlerFunc) handlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		ri := info(r)
+		ri.tenantID = s.tenantID
+		if err := s.limit(w, s.ipLim, "site|"+ri.ip, 300); err != nil {
 			return err
 		}
 		return h(w, r)
@@ -121,6 +162,9 @@ func (s *Server) public(h handlerFunc) handlerFunc {
 // admin authenticates a bearer token and checks a permission.
 func (s *Server) admin(perm auth.Permission, h handlerFunc) handlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
+		if err := s.adminNetworkAllowed(r); err != nil {
+			return err
+		}
 		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || tok == "" {
 			return apperr.Unauthorized(apperr.CodeUnauthorized, "Send an access token: Authorization: Bearer <token>.")
@@ -153,9 +197,13 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /healthz", s.wrap(s.healthz))
 	m.HandleFunc("GET /readyz", s.wrap(s.readyz))
 	m.HandleFunc("GET /openapi.yaml", s.wrap(s.openapi))
-	m.HandleFunc("GET /docs", s.wrap(s.docsRedoc))
+	m.HandleFunc("GET /docs/reference", s.wrap(s.docsRedoc))
 	m.HandleFunc("GET /docs/try", s.wrap(s.docsSwagger))
-	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/docs", http.StatusFound) })
+
+	// The public website's converter and calendar (no key; read-only, limited per IP).
+	m.HandleFunc("GET /site/v1/info", s.wrap(s.site(s.getSiteInfo)))
+	m.HandleFunc("GET /site/v1/convert", s.wrap(s.site(s.getConvert)))
+	m.HandleFunc("GET /site/v1/months/{basis}/{year}/{month}", s.wrap(s.site(s.getMonth)))
 
 	// Public read API (API key).
 	m.HandleFunc("GET /v1/manifest", s.wrap(s.public(s.getManifest)))
@@ -261,6 +309,9 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) error {
 	}
 	if !s.data.Loaded() {
 		checks["calendarData"], status = "not loaded", http.StatusServiceUnavailable
+	}
+	if s.draining.Load() {
+		checks["shutdown"], status = "draining", http.StatusServiceUnavailable
 	}
 	st := "ready"
 	if status != http.StatusOK {

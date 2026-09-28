@@ -1,86 +1,74 @@
-# BS/AD Calendar Platform
+# BS/AD Calendar API
 
-An API-controlled Bikram Sambat (BS) and Gregorian (AD) calendar: one Go service owns the year data,
-events and admin-controlled UI configuration, and web (Next.js) and mobile (React Native) clients
-sync from it and convert dates locally.
-
-| Part | Status |
-|------|--------|
-| Go service `services/calendar-api` (public + admin API, worker, migrations) | **Implemented and tested** |
-| OpenAPI contract `api/openapi.yaml`, docs at `/docs` | **Implemented**, enforced by tests |
-| Docker Compose stack, CI workflow, smoke test | **Implemented** |
-| TypeScript packages (`bs-core`, hooks, web and native components) | Planned (see docs/architecture.md §10) |
-| Admin panel (Next.js) | Planned (the admin API it needs is complete) |
+A Dockerized, API-controlled Bikram Sambat (BS) and Gregorian (AD) calendar. One Go service owns the
+BS year table, holidays and events, and the look of the calendar; websites and mobile apps call its API
+to draw date pickers and event calendars in light or dark mode.
 
 ## Quick start
 
 Only Docker is required.
 
 ```bash
-cp .env.example .env              # optional; development defaults are built in
-docker compose up -d --build      # postgres → bootstrap (migrate + seed) → api + worker
+docker compose up -d --build        # postgres → bootstrap (migrate + seed) → api + worker
 ```
 
-- API reference: http://localhost:8080/docs · try it: http://localhost:8080/docs/try
-- Dev public API key: `pk_dev_local_public_key_0001`
-- Dev super admin: `admin@example.com` / `change-me-please-now`
+- Developer guide: http://localhost:8080/docs · API reference: http://localhost:8080/docs/reference · try it: http://localhost:8080/docs/try
+- Development public key: `pk_dev_local_public_key_0001`
+- Development admin: `admin@example.com` / `change-me-please-now`
 
 ```bash
-curl -s -H "X-Api-Key: pk_dev_local_public_key_0001" "http://localhost:8080/v1/convert?ad=2026-09-24"
-docker compose --profile tools run --rm smoke     # 40 end-to-end checks that follow docs/api.md
-docker compose --profile test run --rm test       # all Go tests incl. the flow + contract test
+curl -H "X-Api-Key: pk_dev_local_public_key_0001" "http://localhost:8080/v1/convert?ad=2026-09-24"
+curl -H "X-Api-Key: pk_dev_local_public_key_0001" "http://localhost:8080/v1/months/BS/2083/6?include=events"
+docker compose --profile tools run --rm smoke     # end-to-end check of the running stack
+docker compose --profile test run --rm test       # all Go tests (including the API contract test)
 ```
-
-`make help` lists shortcuts (Git Bash or WSL on Windows).
 
 ## Documentation
 
-| Document | For |
-|----------|-----|
-| [docs/api.md](docs/api.md) | Using and managing the API: auth, conventions, every flow with commands, webhooks, error codes, change process |
-| [api/openapi.yaml](api/openapi.yaml) | The contract (source of truth for fields) |
-| [api/requests.http](api/requests.http) | Click-through walkthrough in VS Code (REST Client) |
-| [api/CHANGELOG.md](api/CHANGELOG.md) | API versions |
-| [docs/architecture.md](docs/architecture.md) | Components, data model, design decisions |
-| [docs/flow.md](docs/flow.md) | Sequence and state diagrams |
-| [docs/reliable.md](docs/reliable.md) | Correctness, tests, failure modes, SLOs, runbooks |
-| [.env.example](.env.example) | Every configuration variable |
+| Read this | To |
+|-----------|----|
+| [docs/how-it-works.md](docs/how-it-works.md) | Understand the whole system in plain language |
+| [docs/web.md](docs/web.md) | Add the AD/BS date picker and event calendar to a React or Next.js site |
+| [docs/expo-date-picker.md](docs/expo-date-picker.md) | Add them to an Expo / React Native app (quick, online; reuses the web files) |
+| [docs/react-native.md](docs/react-native.md) | Full React Native setup: works offline, admin-controlled rollouts, EAS Update |
+| [docs/deployment.md](docs/deployment.md) | Run it in production with Docker Compose, HTTPS, backups and updates |
+| [Releases and self-hosting](#releases-and-self-hosting) | Use the published Docker image instead of building from source |
+| [docs/api.md](docs/api.md) | Use the admin and public API: auth, every flow with commands, errors, webhooks |
+| [api/openapi.yaml](api/openapi.yaml) | Exact API contract (also served at `/docs/reference`) |
+| [docs/architecture.md](docs/architecture.md), [docs/flow.md](docs/flow.md), [docs/reliable.md](docs/reliable.md) | Design, diagrams, and correctness and operations detail |
 
 ## Repository layout
 
 ```
-api/                      OpenAPI contract (embedded in the binary), changelog, REST Client walkthrough
-fixtures/                 Shared data: BS year table seed, golden conversions, UI config schema + default
-services/calendar-api/
-  cmd/calendar-api/       one binary: serve | worker | bootstrap | migrate | convert | dump | healthcheck
-  internal/bscal/         pure AD⇄BS engine (no I/O; tested on every day of the range)
-  internal/httpapi/       handlers, middleware, flow + contract test
-  internal/…              auth, events, calendardata, uiconfig, outbox, audit, store (migrations), app wiring
-deploy/postgres/          database init (creates the test database)
-scripts/smoke.sh          end-to-end smoke test (follows docs/api.md)
-docker-compose.yml        local stack; profiles "tools" (smoke, webhook-sink) and "test"
-.github/workflows/ci.yml  vet, tests, fuzzing, govulncheck, OpenAPI lint, breaking-change check, stack smoke
+api/                     OpenAPI contract (embedded in the binary), changelog, VS Code REST walkthrough
+fixtures/                BS year table seed (1975-2100, with sources), golden conversions, UI config schema
+services/calendar-api/   the Go service: one binary with serve | worker | bootstrap | migrate | convert ...
+deploy/compose/          production Docker Compose + Caddy (HTTPS) + backups
+deploy/postgres/         least-privilege database roles
+scripts/smoke.sh         end-to-end smoke test
+docker-compose.yml       local development stack
+.github/workflows/       CI (tests, vulnerability scan, API lint, breaking-change check) and image release
 ```
 
-## Year data: read before production
+## Releases and self-hosting
 
-The seed table (`fixtures/year-table.seed.json`) covers **BS 1975–2100**. It was built from three
-open-source tables that were compared year by year:
+Pushing a `vX.Y.Z` tag runs CI and publishes the image **`ghcr.io/sarojdhakal307/calendar-api:vX.Y.Z`**
+([.github/workflows/release.yml](.github/workflows/release.yml)). You do not need this repository on a server
+to run it: pull that image with your own compose file. [deploy/compose/](deploy/compose/) is a complete
+example (Caddy + HTTPS + backups), described in [docs/deployment.md](docs/deployment.md).
 
-- **BS 1975–2083:** at least two sources agree on every year, so these years are marked `verified`.
-  The sources disagreed on 2004, 2062, 2082 and 2083; the table uses the majority value, which comes
-  from the most recently maintained source.
-- **BS 2084–2100:** the sources disagree, so these years are marked `projected`.
+**Related repository:** [bs-calendar-server](https://github.com/Sarojdhakal307/bs-calendar-server) is the
+server setup for the hosted instance at https://calendar.oneclickinfosys.com: it runs this image with
+PostgreSQL, nginx and daily backups on one Linux server. Clone it to host your own copy with nginx instead of
+Caddy. It holds no application code, only an image tag and server settings.
 
-The file records its provenance. **A calendar admin still has to confirm the verified years against
-the official government calendar before production** (docs/reliable.md §3.1). Corrections go through
-the four-eyes draft workflow in the admin API and reach apps without a release.
+## Before production
 
-## Tests at a glance
+- **Confirm the year data.** The seed table was built by comparing three open-source tables. BS 1975-2083
+  are marked verified, where at least two sources agree; 2084 onward are projected. A calendar admin must
+  still check the verified years against the official calendar ([docs/reliable.md §3.1](docs/reliable.md#31-sourcing-the-year-table-phase-0)).
+- **Follow [docs/deployment.md](docs/deployment.md).** Production mode refuses to start with development secrets.
 
-| Suite | What it proves |
-|-------|----------------|
-| `internal/bscal` | Golden dates from independent sources; every day in BS 1975–2100 round-trips with no gaps; integer date maths matches the standard library; invalid tables are rejected; fuzzing |
-| `internal/httpapi` flow test | Real server + Postgres: every documented flow, **every request and response validated against `api/openapi.yaml`**, and a failure if any operation is never exercised |
-| `internal/events`, `uiconfig`, `auth`, `outbox` | Recurrence edge cases, validation, merge patch, contrast gate, JWT and password rules, webhook signatures, SSRF guard |
-| `scripts/smoke.sh` | The documented commands work against a running stack |
+## License
+
+MIT, see [LICENSE](LICENSE).

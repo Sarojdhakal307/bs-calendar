@@ -4,6 +4,15 @@ All notable changes to the HTTP API (`api/openapi.yaml`). The API version is `in
 in the spec: minor for additions, patch for documentation or fixes. Breaking changes ship as a
 new URL prefix (`/v2`) and are announced here at least 6 months ahead (docs/api.md §11.2).
 
+## Unreleased
+
+**Documentation pages** (the `/v1` contract is unchanged)
+- `/docs` is now the developer guide, with integration guides for React, Next.js and React Native.
+  The Redoc reference moved to `/docs/reference`; `/docs/try` is unchanged.
+- `/site/v1/info`, `/site/v1/convert` and `/site/v1/months/{basis}/{year}/{month}` serve the public
+  website's converter and calendar. They need no API key, are read-only and are limited per IP.
+  They are internal to the website and not part of the documented API.
+
 ## 1.0.0 — 2026-09-24
 
 First release of `/v1`.

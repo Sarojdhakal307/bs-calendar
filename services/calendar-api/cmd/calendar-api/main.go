@@ -6,12 +6,14 @@
 //	calendar-api migrate up|down|status
 //	calendar-api convert AD|BS YYYY-MM-DD   offline conversion with the embedded seed table
 //	calendar-api dump               every supported day as CSV (for the cross-language parity job)
+//	calendar-api snapshot           the seed year table as /v1/calendar/data JSON (offline copy for apps)
 //	calendar-api healthcheck        exits 0 if GET /healthz succeeds (for container health checks)
 //	calendar-api version
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,6 +24,8 @@ import (
 	"syscall"
 	"time"
 	_ "time/tzdata" // IANA zones even in minimal containers
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"bscalendar/fixtures"
 	"bscalendar/services/calendar-api/internal/app"
@@ -55,12 +59,14 @@ func main() {
 		err = convert()
 	case "dump":
 		err = dump()
+	case "snapshot":
+		err = snapshot()
 	case "healthcheck":
 		err = healthcheck()
 	case "version":
 		fmt.Println(version)
 	default:
-		err = fmt.Errorf("unknown command %q (serve, worker, bootstrap, migrate, convert, dump, healthcheck, version)", cmd)
+		err = fmt.Errorf("unknown command %q (serve, worker, bootstrap, migrate, convert, dump, snapshot, healthcheck, version)", cmd)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -73,9 +79,18 @@ func setup(forServe bool) (config.Config, *slog.Logger, error) {
 	if err != nil {
 		return cfg, nil, fmt.Errorf("configuration:\n%w", err)
 	}
-	log := cfg.Logger().With("service", "calendar-api", "build", version)
+	log := cfg.Logger().With("service", "calendar-api", "build", version, "env", cfg.AppEnv)
 	slog.SetDefault(log)
+	for _, w := range cfg.Warnings {
+		log.Warn("configuration warning", "detail", w)
+	}
 	return cfg, log, nil
+}
+
+func openPool(ctx context.Context, cfg config.Config, url string, log *slog.Logger) (*pgxpool.Pool, error) {
+	openCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	return store.Open(openCtx, store.Options{URL: url, MaxConns: cfg.DBMaxConns, StatementTimeout: cfg.DBStatementTimeout}, log)
 }
 
 func serve(ctx context.Context) error {
@@ -83,13 +98,15 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	openCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	pool, err := store.Open(openCtx, cfg.DatabaseURL, log)
-	cancel()
+	pool, err := openPool(ctx, cfg, cfg.DatabaseURL, log)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
+	// Fail fast instead of serving errors if the deploy forgot to migrate first.
+	if err := store.CheckSchema(ctx, pool); err != nil {
+		return err
+	}
 	a, err := app.New(ctx, cfg, pool, log, version)
 	if err != nil {
 		return err
@@ -101,8 +118,8 @@ func serve(ctx context.Context) error {
 	}
 
 	api := &http.Server{Addr: cfg.HTTPAddr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second,
-		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+		ReadTimeout: 30 * time.Second, WriteTimeout: cfg.RequestTimeout + 30*time.Second, IdleTimeout: 120 * time.Second,
+		MaxHeaderBytes: 64 << 10, ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.Handler())
 	mon := &http.Server{Addr: cfg.MetricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
@@ -117,8 +134,13 @@ func serve(ctx context.Context) error {
 			return err
 		}
 	}
+	// Graceful shutdown: fail readiness first so the load balancer stops routing here,
+	// wait SHUTDOWN_DRAIN, then finish in-flight requests.
+	srv.SetDraining()
+	log.Info("draining", "for", cfg.ShutdownDrain.String())
+	time.Sleep(cfg.ShutdownDrain)
 	log.Info("shutting down")
-	sctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	sctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	_ = mon.Shutdown(sctx)
 	return api.Shutdown(sctx)
@@ -140,9 +162,7 @@ func worker(ctx context.Context) error {
 	if len(cfg.WebhookEncKey) == 0 {
 		return errors.New("WEBHOOK_SECRET_KEY is required for the worker")
 	}
-	openCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	pool, err := store.Open(openCtx, cfg.DatabaseURL, log)
-	cancel()
+	pool, err := openPool(ctx, cfg, cfg.DatabaseURL, log)
 	if err != nil {
 		return err
 	}
@@ -182,7 +202,7 @@ func migrate(ctx context.Context) error {
 	if len(os.Args) > 2 {
 		dir = os.Args[2]
 	}
-	return store.Migrate(ctx, cfg.DatabaseURL, dir, log)
+	return store.Migrate(ctx, cfg.MigrationDatabaseURL, dir, log)
 }
 
 func seedTable() (*bscal.Table, error) {
@@ -257,4 +277,15 @@ func healthcheck() error {
 		return fmt.Errorf("healthz returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// snapshot prints the embedded seed table in the /v1/calendar/data wire format, for apps
+// that want to ship an offline copy of the year table (docs/react-native.md "Offline").
+func snapshot() error {
+	t, err := seedTable()
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	return enc.Encode(t.Snapshot())
 }
