@@ -58,7 +58,7 @@ It gives you `useMonth(api, basis, year, month)` and `useUiConfig(api, app)`.
 ```tsx
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { type Basis, type CalendarApi, type ThemeTokens, WEEKDAYS, addMonths, toNepaliDigits, yearMonthOf } from "../lib/calendar-api";
+import { type Basis, type CalendarApi, type ThemeTokens, WEEKDAYS, addMonths, isAtRangeEnd, isAtRangeStart, toNepaliDigits, yearMonthOf } from "../lib/calendar-api";
 import { useMonth } from "../lib/use-calendar";
 
 export type DateValue = { ad: string; bs: string };
@@ -101,18 +101,43 @@ export function DatePickerSheet(props: Props) {
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
       <View style={[styles.sheet, { backgroundColor: theme.bg, borderTopLeftRadius: radius, borderTopRightRadius: radius }]}>
-        <View style={styles.header}>
-          <Pressable onPress={() => ym && setYm(addMonths(ym.year, ym.month, -1))} hitSlop={12} accessibilityLabel="Previous month">
-            <Text style={[styles.arrow, { color: theme.text }]}>‹</Text>
-          </Pressable>
-          <Text style={[styles.title, { color: theme.text }]}>
-            {grid ? `${grid.monthName[locale]} ${digits(grid.year)}` : "…"}
+              <View style={styles.header}>
+        <Pressable
+          onPress={() => ym && setYm(addMonths(ym.year, ym.month, -1))}
+          hitSlop={12}
+          accessibilityLabel="Previous month"
+          disabled={!ym || isAtRangeStart(mode, ym.year, ym.month)}
+        >
+          <Text
+            style={[
+              styles.arrow,
+              { color: !ym || isAtRangeStart(mode, ym.year, ym.month) ? theme.disabled : theme.text },
+            ]}
+          >
+            ‹
           </Text>
-          <Pressable onPress={() => ym && setYm(addMonths(ym.year, ym.month, 1))} hitSlop={12} accessibilityLabel="Next month">
-            <Text style={[styles.arrow, { color: theme.text }]}>›</Text>
-          </Pressable>
-        </View>
+        </Pressable>
 
+        <Text style={[styles.title, { color: theme.text }]}>
+          {grid ? `${grid.monthName[locale]} ${digits(grid.year)}` : "…"}
+        </Text>
+
+        <Pressable
+          onPress={() => ym && setYm(addMonths(ym.year, ym.month, 1))}
+          hitSlop={12}
+          accessibilityLabel="Next month"
+          disabled={!ym || isAtRangeEnd(mode, ym.year, ym.month)}
+        >
+          <Text
+            style={[
+              styles.arrow,
+              { color: !ym || isAtRangeEnd(mode, ym.year, ym.month) ? theme.disabled : theme.text },
+            ]}
+          >
+            ›
+          </Text>
+        </Pressable>
+      </View>
         {allowModeSwitch && (
           <View style={styles.modes} accessibilityRole="radiogroup">
             {(["BS", "AD"] as const).map((m) => (
@@ -192,7 +217,7 @@ A full-width month view with the selected day's events underneath. It reuses the
 ```tsx
 import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { type Basis, type CalendarApi, type ThemeTokens, WEEKDAYS, addMonths, yearMonthOf } from "../lib/calendar-api";
+import { type Basis, type CalendarApi, type ThemeTokens, WEEKDAYS, addMonths, isAtRangeEnd, isAtRangeStart, yearMonthOf } from "../lib/calendar-api";
 import { useMonth } from "../lib/use-calendar";
 
 type Props = { api: CalendarApi; theme: ThemeTokens; scheme: "light" | "dark"; mode?: Basis; locale?: "en" | "ne" };
@@ -214,15 +239,43 @@ export function EventCalendar({ api, theme, scheme, mode = "BS", locale = "en" }
 
   return (
     <View>
-      <View style={styles.header}>
-        <Pressable onPress={() => ym && setYm(addMonths(ym.year, ym.month, -1))} hitSlop={12}>
-          <Text style={[styles.arrow, { color: theme.text }]}>‹</Text>
-        </Pressable>
-        <Text style={[styles.title, { color: theme.text }]}>{grid ? `${grid.monthName[locale]} ${grid.year}` : "…"}</Text>
-        <Pressable onPress={() => ym && setYm(addMonths(ym.year, ym.month, 1))} hitSlop={12}>
-          <Text style={[styles.arrow, { color: theme.text }]}>›</Text>
-        </Pressable>
-      </View>
+     <View style={styles.header}>
+  <Pressable
+    onPress={() => ym && setYm(addMonths(ym.year, ym.month, -1))}
+    hitSlop={12}
+    accessibilityLabel="Previous month"
+    disabled={!ym || isAtRangeStart(mode, ym.year, ym.month)}
+  >
+    <Text
+      style={[
+        styles.arrow,
+        { color: !ym || isAtRangeStart(mode, ym.year, ym.month) ? theme.disabled : theme.text },
+      ]}
+    >
+      ‹
+    </Text>
+  </Pressable>
+
+  <Text style={[styles.title, { color: theme.text }]}>
+    {grid ? `${grid.monthName[locale]} ${grid.year}` : "…"}
+  </Text>
+
+  <Pressable
+    onPress={() => ym && setYm(addMonths(ym.year, ym.month, 1))}
+    hitSlop={12}
+    accessibilityLabel="Next month"
+    disabled={!ym || isAtRangeEnd(mode, ym.year, ym.month)}
+  >
+    <Text
+      style={[
+        styles.arrow,
+        { color: !ym || isAtRangeEnd(mode, ym.year, ym.month) ? theme.disabled : theme.text },
+      ]}
+    >
+      ›
+    </Text>
+  </Pressable>
+</View>
 
       <View style={styles.row}>
         {WEEKDAYS[locale].map((w) => <Text key={w} style={[styles.weekday, { color: theme.muted }]}>{w}</Text>)}
