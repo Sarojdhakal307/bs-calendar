@@ -145,7 +145,26 @@ export function addMonths(year: number, month: number, delta: number) {
   const i = year * 12 + (month - 1) + delta;
   return { year: Math.floor(i / 12), month: (i % 12) + 1 };
 }
+/** The API's supported range: BS 1975-2100 (AD 1918-2044). */
+export const SUPPORTED_RANGE: Record<
+  Basis,
+  { min: { year: number; month: number }; max: { year: number; month: number } }
+> = {
+  BS: { min: { year: 1975, month: 1 }, max: { year: 2100, month: 12 } },
+  AD: { min: { year: 1918, month: 1 }, max: { year: 2044, month: 12 } },
+};
 
+/** True when `year`/`month` is at or before the first supported month, for this basis. */
+export function isAtRangeStart(basis: Basis, year: number, month: number) {
+  const { min } = SUPPORTED_RANGE[basis];
+  return year < min.year || (year === min.year && month <= min.month);
+}
+
+/** True when `year`/`month` is at or after the last supported month, for this basis. */
+export function isAtRangeEnd(basis: Basis, year: number, month: number) {
+  const { max } = SUPPORTED_RANGE[basis];
+  return year > max.year || (year === max.year && month >= max.month);
+}
 /** "2083" → "२०८३" */
 export function toNepaliDigits(s: string | number) {
   return String(s).replace(/[0-9]/g, (d) => String.fromCharCode(0x0966 + Number(d)));
@@ -199,7 +218,7 @@ export function useUiConfig(api: CalendarApi, app: string) {
 ```tsx
 "use client";
 import { useEffect, useState } from "react";
-import { type Basis, type CalendarApi, WEEKDAYS, addMonths, toNepaliDigits, yearMonthOf } from "@/lib/calendar-api";
+import { type Basis, type CalendarApi, WEEKDAYS, addMonths, isAtRangeEnd, isAtRangeStart, toNepaliDigits, yearMonthOf } from "@/lib/calendar-api";
 import { useMonth } from "@/lib/use-calendar";
 import "./calendar.css";
 
@@ -247,9 +266,23 @@ export function DatePicker(props: {
       {open && (
         <div className="cal-popover" role="dialog" aria-label="Choose a date">
           <div className="cal-header">
-            <button type="button" aria-label="Previous month" onClick={() => ym && setYm(addMonths(ym.year, ym.month, -1))}>‹</button>
-            <strong>{title}</strong>
-            <button type="button" aria-label="Next month" onClick={() => ym && setYm(addMonths(ym.year, ym.month, 1))}>›</button>
+            <button
+  type="button"
+  aria-label="Previous month"
+  disabled={!ym || isAtRangeStart(mode, ym.year, ym.month)}
+  onClick={() => ym && setYm(addMonths(ym.year, ym.month, -1))}
+>
+  ‹
+</button>
+<strong>{title}</strong>
+<button
+  type="button"
+  aria-label="Next month"
+  disabled={!ym || isAtRangeEnd(mode, ym.year, ym.month)}
+  onClick={() => ym && setYm(addMonths(ym.year, ym.month, 1))}
+>
+  ›
+</button>
           </div>
 
           {allowModeSwitch && (
@@ -337,7 +370,7 @@ A full-width month view with the day's events underneath. It reuses the same hoo
 ```tsx
 "use client";
 import { useEffect, useState } from "react";
-import { type Basis, type CalendarApi, WEEKDAYS, addMonths, yearMonthOf } from "@/lib/calendar-api";
+import { type Basis, type CalendarApi, WEEKDAYS, addMonths, isAtRangeEnd, isAtRangeStart, yearMonthOf } from "@/lib/calendar-api";
 import { useMonth } from "@/lib/use-calendar";
 
 export function EventCalendar({ api, mode = "BS", locale = "en" }: { api: CalendarApi; mode?: Basis; locale?: "en" | "ne" }) {
@@ -357,9 +390,21 @@ export function EventCalendar({ api, mode = "BS", locale = "en" }: { api: Calend
   return (
     <section className="cal">
       <header className="cal-header">
-        <button onClick={() => ym && setYm(addMonths(ym.year, ym.month, -1))}>‹</button>
-        <h2>{grid ? `${grid.monthName[locale]} ${grid.year}` : "…"}</h2>
-        <button onClick={() => ym && setYm(addMonths(ym.year, ym.month, 1))}>›</button>
+        <button
+  aria-label="Previous month"
+  disabled={!ym || isAtRangeStart(mode, ym.year, ym.month)}
+  onClick={() => ym && setYm(addMonths(ym.year, ym.month, -1))}
+>
+  ‹
+</button>
+<h2>{grid ? `${grid.monthName[locale]} ${grid.year}` : "…"}</h2>
+<button
+  aria-label="Next month"
+  disabled={!ym || isAtRangeEnd(mode, ym.year, ym.month)}
+  onClick={() => ym && setYm(addMonths(ym.year, ym.month, 1))}
+>
+  ›
+</button>
       </header>
       <div className="cal-grid">
         {WEEKDAYS[locale].map((w) => <div key={w} className="cal-weekday">{w}</div>)}
